@@ -1,0 +1,50 @@
+Differential evolution algorithm inspired by [this paper](https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.344.546&rep=rep1&type=pdf). (Jakob Vesterstram, Rene Thomsen, 2004)
+
+Implement a function with signature float array -> float, the closer to 0 the function returns, the better the parameters fit.
+
+For example using these parameters:
+
+```
+let optimizer = horsesAndJockeys
+let generations = 1000
+let argsize = 2
+let popsize = 200
+let min, max = -100.0, 100.0
+```
+
+You can solve systems of equations:
+
+```
+// Solve systems of equations like, x + y = 6 and -3x + y = 2, but with twists like please make x > y
+let systemOfEquations (xs: float array) =
+    let x = xs[0]
+    let y = xs[1]
+    abs (x + y - 6.0) + abs (-3.0 * x + y - 2.0)
+```
+
+Prints
+
+```
+xs = [|1.0; 5.0|]
+score = 0.0
+```
+
+Another example:
+```
+// There are 36 heads and 100 legs, how many horses and jockeys are there? 14 and 22
+let horsesAndJockeys (xs: float array) =
+    let horses = xs[0]
+    let jockeys = xs[1]
+    let legs = horses * 4.0 + jockeys * 2.0
+    let heads = horses + jockeys
+    abs (36.0 - heads) + abs (100.0 - legs)
+```
+
+Prints
+
+```
+xs = [|14.0; 22.0|] 
+score = 0.0
+```
+
+Not guaranteed to find any solution or any good solution.
