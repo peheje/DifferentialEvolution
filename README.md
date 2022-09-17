@@ -27,14 +27,14 @@ let systemOfEquations (xs: float array) =
     abs (x + y - 6.0) + abs (-3.0 * x + y - 2.0)
 ```
 
-Outputs
+Outputs:
 
 ```
 xs = [|1.0; 5.0|]
 score = 0.0
 ```
 
-Also solve nonlinear system of equations with constraints, like [this example from Matlabs documentation](https://www.mathworks.com/help/optim/ug/systems-of-equations-with-constraints-problem-based.html).
+Also solve nonlinear system of equations with constraints, like [this example from Matlabs documentation](https://www.mathworks.com/help/optim/ug/systems-of-equations-with-constraints-problem-based.html):
 
 ```fsharp
 let nonlinearSystemOfEquationsWithConstraints (xs: float array) =
@@ -56,6 +56,7 @@ score = 0.0
 ```
 
 Another example:
+
 ```fsharp
 // There are 36 heads and 100 legs, how many horses and jockeys are there?
 let horsesAndJockeys (xs: float array) =
@@ -66,7 +67,7 @@ let horsesAndJockeys (xs: float array) =
     abs (36.0 - heads) + abs (100.0 - legs)
 ```
 
-Outputs
+Outputs:
 
 ```
 xs = [|14.0; 22.0|] 
