@@ -75,3 +75,7 @@ score = 0.0
 ```
 
 Not guaranteed to find any solution or any good solution.
+
+## Parameters
+
+Beside setting the argsize and min/max parameters, which depends on the optimizer function, you can tune the parameters ```generations```,  ```popsize```, ```crossoverOdds``` and ```mutateOdds```.
