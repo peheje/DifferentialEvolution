@@ -53,8 +53,10 @@ let f2 (xs: float array) =
         s <- s + abs xs[i]
         p <- p * xs[i]
     abs s + abs p
-    //(xs |> Array.sumBy abs) +
-    //(xs |> Array.fold (fun s v -> s * v) 1.0)
+
+let f2_fun (xs: float array) =
+    let (sum, product) = xs |> Array.fold (fun (s, p) v -> (s + v, p * v)) (0.0, 1.0)
+    abs sum + abs product
 
 // f3(0..) = 0
 let f3 (xs: float array) =
