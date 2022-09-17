@@ -14,10 +14,10 @@ let sample agents =
 
 let print = 1000
 let optimizer = nonlinearSystemOfEquationsWithConstraints
-let generations = 1000
 let argsize = 2
-let popsize = 200
 let min, max = -100.0, 100.0
+let generations = 1000
+let popsize = 200
 let crossoverOdds () = randRange 0.1 1.0
 let mutateOdds () = randRange 0.2 0.95
 let clamp x = System.Math.Clamp(x, min, max)
