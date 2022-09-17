@@ -50,6 +50,20 @@ let f2 (xs: float array) =
     let (sum, product) = xs |> Array.fold (fun (s, p) v -> (s + v, p * v)) (0.0, 1.0)
     abs sum + abs product
 
+let sumUntil stop xs =
+    let rec loop acc xs i =
+        if i = stop then acc
+        else loop ((Array.head xs) + acc) (Array.tail xs) (i + 1)
+    loop 0.0 xs 0
+
+let f3fun (xs: float array) =
+    let (a, b) =
+        xs |> Array.fold (fun (i, s) v ->
+            let ss = sumUntil i xs
+            (i + 1, s + (ss*ss))
+        ) (1, 0.0)
+    b
+
 // f3(0..) = 0
 let f3 (xs: float array) =
     let mutable s = 0.0
@@ -59,3 +73,10 @@ let f3 (xs: float array) =
             ss <- ss + xs[i]
         s <- s + (ss*ss)
     s
+
+let arr = [|2.0..19.0|]
+
+sumUntil 1 arr
+
+f3 arr
+f3fun arr
