@@ -12,8 +12,8 @@ let sample agents =
     let i = random.Next(agents |> Array.length)
     agents[i].xs
 
-let print = 100
-let optimizer = systemOfEquations
+let print = 1000
+let optimizer = nonlinearSystemOfEquationsWithConstraints
 let generations = 1000
 let argsize = 2
 let popsize = 200

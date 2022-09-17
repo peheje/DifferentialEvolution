@@ -2,11 +2,21 @@ module Problems
 
 let square x = x * x
 
-// Solve systems of equations like, x + y = 6 and -3x + y = 2, but with twists like please make x > y
+// Solve systems of equations like, x + y = 6 and -3x + y = 2
 let systemOfEquations (xs: float array) =
     let x = xs[0]
     let y = xs[1]
     abs (x + y - 6.0) + abs (-3.0 * x + y - 2.0)
+
+let nonlinearSystemOfEquationsWithConstraints (xs: float array) =
+    let x = xs[0]
+    let y = xs[1]
+    let t1 = (x + 1.0)*(10.0 - x)*((1.0 + y*y)/(1.0 + y*y + y))
+    let t2 = (y + 2.0)*(20.0 - y)*((1.0 + x*x)/(1.0 + x*x + x))
+    let c1 = x*x + y*y
+    let e = if c1 > 10.0 then c1 else 0.0
+
+    abs(t1) + abs(t2) + e
 
 // There are 36 heads and 100 legs, how many horses and jockeys are there? 14 and 22
 let horsesAndJockeys (xs: float array) =
