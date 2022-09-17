@@ -5,7 +5,7 @@ Implement a function with signature float array -> float, the closer to 0 the fu
 For example using these parameters:
 
 ```
-let optimizer = horsesAndJockeys
+let optimizer = systemOfEquations
 let generations = 1000
 let argsize = 2
 let popsize = 200
