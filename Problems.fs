@@ -47,5 +47,21 @@ let f1 (xs: float array) = xs |> Array.sumBy (fun x -> x * x)
 
 // f2(0..) = 0
 let f2 (xs: float array) =
-    (xs |> Array.sumBy abs) +
-    (xs |> Array.fold (fun s v -> s * v) 1.0)
+    let mutable s = 0.0
+    let mutable p = 1.0
+    for i in 0..(xs |> Array.length) - 1 do
+        s <- s + abs xs[i]
+        p <- p * xs[i]
+    abs s + abs p
+    //(xs |> Array.sumBy abs) +
+    //(xs |> Array.fold (fun s v -> s * v) 1.0)
+
+// f3(0..) = 0
+let f3 (xs: float array) =
+    let mutable s = 0.0
+    for i in 0..(xs |> Array.length) - 1 do
+        let mutable ss = 0.0
+        for _ in 0..i do
+            ss <- ss + xs[i]
+        s <- s + (ss*ss)
+    s

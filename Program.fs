@@ -13,9 +13,9 @@ let sample agents =
     agents[i].xs
 
 let print = 1000
-let optimizer = f1
+let optimizer = f2
 let argsize = 100
-let min, max = -100.0, 100.0
+let min, max = -10.0, 10.0
 let generations = 10_000
 let popsize = 200
 let crossoverOdds () = randRange 0.1 1.0
