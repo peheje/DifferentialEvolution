@@ -61,7 +61,7 @@ let f3fun (xs: float array) =
         xs |> Array.fold (fun (i, s) v ->
             let ss = sumUntil i xs
             (i + 1, s + (ss*ss))
-        ) (1, 0.0)
+        ) (0, 0.0)
     b
 
 // f3(0..) = 0
