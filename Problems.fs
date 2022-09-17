@@ -3,11 +3,10 @@ module Problems
 let square x = x * x
 
 // Solve systems of equations like, x + y = 6 and -3x + y = 2, but with twists like please make x > y
-let equation (xs: float array) =
+let systemOfEquations (xs: float array) =
     let x = xs[0]
     let y = xs[1]
-    let err = if x < y then 100.0 else 0.0
-    abs (x + y - 6.0) + abs (-3.0 * x + y - 2.0) + err
+    abs (x + y - 6.0) + abs (-3.0 * x + y - 2.0)
 
 // There are 36 heads and 100 legs, how many horses and jockeys are there? 14 and 22
 let horsesAndJockeys (xs: float array) =

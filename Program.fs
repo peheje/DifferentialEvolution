@@ -1,6 +1,4 @@
-﻿// Differential evolution algorithm inspired by (https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.344.546&rep=rep1&type=pdf)
-
-open Problems
+﻿open Problems
 
 let random = System.Random.Shared
 let sw = System.Diagnostics.Stopwatch.StartNew ()
@@ -14,15 +12,15 @@ let sample agents =
     let i = random.Next(agents |> Array.length)
     agents[i].xs
 
-let print = 1000
-let optimizer = f1
-let generations = 10_000
-let argsize = 100
-let popsize = 500
-let min, max = -5.12, 5.12
-let clamp x = System.Math.Clamp(x, min, max)
+let print = 100
+let optimizer = systemOfEquations
+let generations = 1000
+let argsize = 2
+let popsize = 200
+let min, max = -100.0, 100.0
 let crossoverOdds () = randRange 0.1 1.0
 let mutateOdds () = randRange 0.2 0.95
+let clamp x = System.Math.Clamp(x, min, max)
 
 let createAgent () =
     let xs = Array.init argsize (fun _ -> randRange min max)
