@@ -13,7 +13,7 @@ let sample agents =
     agents[i].xs
 
 let print = 1000
-let optimizer = f3
+let optimizer = rastrigin
 let argsize = 100
 let min, max = -10.0, 10.0
 let generations = 10_000

@@ -47,7 +47,7 @@ let f1 (xs: float array) = xs |> Array.sumBy (fun x -> x * x)
 
 // f2(0..) = 0
 let f2 (xs: float array) =
-    let (sum, product) = xs |> Array.fold (fun (s, p) v -> (s + v, p * v)) (0.0, 1.0)
+    let (sum, product) = xs |> Array.fold (fun (s, p) v -> (s + abs v, p * abs v)) (0.0, 1.0)
     abs sum + abs product
 
 // f3(0..) = 0
