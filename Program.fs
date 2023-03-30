@@ -28,6 +28,9 @@ let createAgent () =
 
 let pool = Array.init popsize (fun _ -> createAgent ())
 
+let inline AsFloat b =
+    System.Runtime.CompilerServices.Unsafe.As<bool, int>(ref b) |> float
+
 let mate pool agent =
     let crossover = crossoverOdds ()
     let mutate = mutateOdds ()
@@ -37,16 +40,18 @@ let mate pool agent =
 
     let trial =
         Array.init argsize (fun j ->
-            let doCrossover = rand () < crossover
-            let crossover = System.Convert.ToInt32(doCrossover) |> float
-            crossover * ((x0[j] + (x1[j] - x2[j]) * mutate) |> clamp) + ((1.0-crossover) * agent.xs[j]))
+            let crossover = rand () < crossover |> AsFloat
+            (crossover * ((x0[j] + (x1[j] - x2[j]) * mutate) |> clamp)) + ((1.0-crossover) * agent.xs[j]))
 
     let trialScore = optimizer trial
 
-    if trialScore < agent.score then
-        { xs = trial; score = trialScore }
-    else
-        agent
+    let useTrial = trialScore < agent.score |> AsFloat
+    let newXs = trial |> Array.mapi (fun i x ->
+        (useTrial * x) + ((1.0-useTrial) * agent.xs[i])
+    )
+    let newScore = (useTrial * trialScore) + ((1.0-useTrial) * agent.score)
+
+    { xs = newXs; score = newScore }
 
 let rec loop generation pool =
     if generation % print = 0 then
