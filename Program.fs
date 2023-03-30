@@ -37,10 +37,9 @@ let mate pool agent =
 
     let trial =
         Array.init argsize (fun j ->
-            if rand () < crossover then
-                (x0[j] + (x1[j] - x2[j]) * mutate) |> clamp
-            else
-                agent.xs[j])
+            let doCrossover = rand () < crossover
+            let crossover = System.Convert.ToInt32(doCrossover) |> float
+            crossover * ((x0[j] + (x1[j] - x2[j]) * mutate) |> clamp) + ((1.0-crossover) * agent.xs[j]))
 
     let trialScore = optimizer trial
 
