@@ -1,4 +1,4 @@
-﻿open Problems
+open Problems
 
 let sw = System.Diagnostics.Stopwatch.StartNew ()
 
@@ -36,8 +36,10 @@ let mate pool agent =
 
     let trial =
         Array.init argsize (fun j ->
-            if rand () < crossover then x0[j] + (x1[j] - x2[j]) * mutate |> clamp
-            else agent.xs[j])
+            if rand () < crossover then
+                x0[j] + (x1[j] - x2[j]) * mutate |> clamp
+            else
+                agent.xs[j])
 
     let trialScore = optimizer trial
     if trialScore < agent.score then
