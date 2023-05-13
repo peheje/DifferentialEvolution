@@ -1,11 +1,30 @@
 open Problems
+open System.Threading
 
 let sw = System.Diagnostics.Stopwatch.StartNew ()
 
 let random = System.Random.Shared
-let rand () = random.NextDouble()
+let maxRandoms = 1000
+let mutable randoms = Array.init maxRandoms (fun _ -> 0.0)
+let mutable randomsIndex = 0
+
+let rand () =
+    Interlocked.Increment(&randomsIndex) |> ignore
+    randoms[randomsIndex % maxRandoms]
+
 let randomFloatRange max min = random.NextDouble() * (max - min) + min
 let randomInt max = random.Next(max)
+
+let backgroundTask() =
+    printfn "Background task started"
+    while true do
+        Interlocked.Exchange(&randoms[randomsIndex % maxRandoms], random.NextDouble()) |> ignore
+        //randoms[randomsIndex % maxRandoms] <- random.NextDouble()
+    printfn "Background task completed"
+
+let thread = new Thread(backgroundTask)
+thread.Start()
+Thread.Sleep(1000)
 
 type Agent = { xs: float array; score: float }
 
@@ -13,7 +32,7 @@ let sample agents =
     let i = randomInt(agents |> Array.length)
     agents[i].xs
 
-let print = 1000
+let print = 500
 let optimizer = rastrigin
 let argsize = 100
 let min, max = -10.0, 10.0
