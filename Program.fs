@@ -4,7 +4,7 @@ open System.Threading
 let sw = System.Diagnostics.Stopwatch.StartNew ()
 
 let random = System.Random.Shared
-let maxRandoms = 1000
+let maxRandoms = 10000
 let mutable randoms = Array.init maxRandoms (fun _ -> 0.0)
 let mutable randomsIndex = 0
 
@@ -32,7 +32,7 @@ let sample agents =
     let i = randomInt(agents |> Array.length)
     agents[i].xs
 
-let print = 500
+let print = 1000
 let optimizer = rastrigin
 let argsize = 100
 let min, max = -10.0, 10.0
