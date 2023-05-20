@@ -1,6 +1,4 @@
 open Problems
-open BenchmarkDotNet.Attributes
-open BenchmarkDotNet.Running
 
 let sw = System.Diagnostics.Stopwatch.StartNew ()
 
@@ -59,24 +57,14 @@ let rec loop generation pool =
     if generation = generations then
         pool
     else
-        pool |> Array.Parallel.iteri (fun i x ->
+        pool |> Array.iteri (fun i x ->
             pool[i] <- mate pool x
         )
         loop (generation + 1) pool
 
-[<MemoryDiagnoser>]
-type MyBenchmark() =
-    [<Benchmark>]
-    member this.MyBenchmarkMethod() =
-        let best =
-            loop 0 pool
-            |> Array.minBy (fun agent -> agent.score)
+let best =
+    loop 0 pool
+    |> Array.minBy (fun agent -> agent.score)
 
-        printfn "generation best %A" best
-        printfn "execution time %i ms" (sw.ElapsedMilliseconds)
-
-
-[<EntryPoint>]
-let main args =
-    let summary = BenchmarkRunner.Run<MyBenchmark>()
-    0
+printfn "generation best %A" best
+printfn "execution time %i ms" (sw.ElapsedMilliseconds)
