@@ -1,4 +1,6 @@
 open Problems
+open BenchmarkDotNet.Attributes
+open BenchmarkDotNet.Running
 
 let sw = System.Diagnostics.Stopwatch.StartNew ()
 
@@ -47,7 +49,7 @@ let mate pool agent =
     else
         agent
 
-let rec loop generation pool =
+let rec loop generation pool (pool2: Agent array) =
     if generation % print = 0 then
         let scores = pool |> Array.map (fun agent -> agent.score)
         printfn "generation %i" generation
@@ -57,12 +59,33 @@ let rec loop generation pool =
     if generation = generations then
         pool
     else
-        let next = pool |> Array.Parallel.map (mate pool)
-        loop (generation + 1) next
+        if generation % 2 = 0 then
+            pool |> Array.Parallel.iteri (fun i x ->
+                pool2[i] <- mate pool x
+            )
+            loop (generation + 1) pool pool2
+        else
+            pool2 |> Array.Parallel.iteri (fun i x ->
+                pool[i] <- mate pool2 x
+            )
+            loop (generation + 1) pool2 pool
 
-let best =
-    loop 0 pool
-    |> Array.minBy (fun agent -> agent.score)
 
-printfn "generation best %A" best
-printfn "execution time %i ms" (sw.ElapsedMilliseconds)
+let pool2 = Array.copy pool
+
+[<MemoryDiagnoser>]
+type MyBenchmark() =
+    [<Benchmark>]
+    member this.MyBenchmarkMethod() =
+        let best =
+            loop 0 pool pool2
+            |> Array.minBy (fun agent -> agent.score)
+
+        printfn "generation best %A" best
+        printfn "execution time %i ms" (sw.ElapsedMilliseconds)
+
+
+[<EntryPoint>]
+let main args =
+    let summary = BenchmarkRunner.Run<MyBenchmark>()
+    0
