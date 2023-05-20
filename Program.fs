@@ -63,29 +63,19 @@ let rec loop generation pool (pool2: Agent array) =
             pool |> Array.Parallel.iteri (fun i x ->
                 pool2[i] <- mate pool x
             )
-            loop (generation + 1) pool pool2
+            loop (generation + 1) pool2 pool
         else
             pool2 |> Array.Parallel.iteri (fun i x ->
                 pool[i] <- mate pool2 x
             )
-            loop (generation + 1) pool2 pool
+            loop (generation + 1) pool pool2
 
 
 let pool2 = Array.copy pool
 
-[<MemoryDiagnoser>]
-type MyBenchmark() =
-    [<Benchmark>]
-    member this.MyBenchmarkMethod() =
-        let best =
-            loop 0 pool pool2
-            |> Array.minBy (fun agent -> agent.score)
+let best =
+    loop 0 pool pool2
+    |> Array.minBy (fun agent -> agent.score)
 
-        printfn "generation best %A" best
-        printfn "execution time %i ms" (sw.ElapsedMilliseconds)
-
-
-[<EntryPoint>]
-let main args =
-    let summary = BenchmarkRunner.Run<MyBenchmark>()
-    0
+printfn "generation best %A" best
+printfn "execution time %i ms" (sw.ElapsedMilliseconds)
