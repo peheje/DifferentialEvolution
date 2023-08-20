@@ -7,8 +7,8 @@ const val min = -10.0
 const val max = 10.0
 const val argsize = 1000
 const val popsize = 200
-const val generations = 10000
-const val print = 100
+const val generations = 10_000
+const val print = 1000
 val optimizer = ::f1
 
 fun main() {
