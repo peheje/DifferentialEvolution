@@ -11,7 +11,7 @@ const val generations = 10000
 const val print = 100
 val optimizer = ::f1
 
-fun main(args: Array<String>) {
+fun main() {
 
     measureTime {
         algorithm()
