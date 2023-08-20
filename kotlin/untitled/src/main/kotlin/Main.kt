@@ -7,9 +7,9 @@ const val min = -10.0
 const val max = 10.0
 const val argsize = 1000
 const val popsize = 200
-const val generations = 10_000
+const val generations = 50_000
 const val print = 1000
-val optimizer = ::f1
+val optimizer = ::rastrigin
 
 fun main() {
 
@@ -68,7 +68,9 @@ fun mate(pool: List<Agent>, agent: Agent, crossoverOdds: Double, mutateOdds: Dou
 fun f1(xs: DoubleArray) = xs.sumOf { it * it }
 
 fun rastrigin(xs: DoubleArray): Double {
-    return xs.sumOf { (it * it) - (10.0 * cos(2.0 * PI * it)) }.let { 10.0 * xs.size * it }
+    val a = 10.0
+    val sum = xs.sumOf { (it*it) - (a * cos(2.0 * Math.PI * it)) }
+    return a * xs.size + sum
 }
 
 fun createAgent(): Agent {

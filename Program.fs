@@ -14,10 +14,10 @@ let sample agents =
     agents[i].xs
 
 let print = 1000
-let optimizer = f1
+let optimizer = rastrigin
 let argsize = 1000
 let min, max = -10.0, 10.0
-let generations = 10_000
+let generations = 50_000
 let popsize = 200
 let crossoverOdds () = randomFloatRange 0.1 1.0
 let mutateOdds () = randomFloatRange 0.2 0.95
