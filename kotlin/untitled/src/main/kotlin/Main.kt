@@ -69,7 +69,7 @@ fun f1(xs: DoubleArray) = xs.sumOf { it * it }
 
 fun rastrigin(xs: DoubleArray): Double {
     val a = 10.0
-    val sum = xs.sumOf { (it*it) - (a * cos(2.0 * Math.PI * it)) }
+    val sum = xs.sumOf { (it*it) - (a * cos(2.0 * PI * it)) }
     return a * xs.size + sum
 }
 
