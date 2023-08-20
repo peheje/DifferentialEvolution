@@ -14,8 +14,8 @@ let sample agents =
     agents[i].xs
 
 let print = 1000
-let optimizer = rastrigin
-let argsize = 100
+let optimizer = f1
+let argsize = 1000
 let min, max = -10.0, 10.0
 let generations = 10_000
 let popsize = 200
@@ -29,9 +29,7 @@ let createAgent () =
 
 let pool = Array.init popsize (fun _ -> createAgent ())
 
-let mate pool agent =
-    let crossover = crossoverOdds ()
-    let mutate = mutateOdds ()
+let mate pool crossover mutate agent =
     let x0, x1, x2 = sample pool, sample pool, sample pool
 
     let trial =
@@ -57,7 +55,9 @@ let rec loop generation pool =
     if generation = generations then
         pool
     else
-        let next = pool |> Array.Parallel.map (mate pool)
+        let crossover = crossoverOdds ()
+        let mutate = mutateOdds ()
+        let next = pool |> Array.Parallel.map (mate pool crossover mutate)
         loop (generation + 1) next
 
 let best =

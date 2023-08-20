@@ -30,7 +30,9 @@ private fun algorithm() {
             println("Min ${scores.min()}")
         }
 
-        val next = pool.parallelStream().map { mate(pool, it) }
+        val crossover = Random.nextDouble(0.1, 1.0)
+        val mutate = Random.nextDouble(0.2, 0.95)
+        val next = pool.parallelStream().map { mate(pool, it, crossover, mutate) }
         pool = next.toList()
     }
 
@@ -41,9 +43,7 @@ private fun algorithm() {
 
 data class Agent(val xs: DoubleArray, val score: Double)
 
-fun mate(pool: List<Agent>, agent: Agent): Agent {
-    val crossoverOdds = Random.nextDouble(0.1, 1.0)
-    val mutateOdds = Random.nextDouble(0.2, 0.95)
+fun mate(pool: List<Agent>, agent: Agent, crossoverOdds: Double, mutateOdds: Double): Agent {
 
     val x0 = pool.random().xs
     val x1 = pool.random().xs
