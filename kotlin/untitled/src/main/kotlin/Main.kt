@@ -61,7 +61,7 @@ fun mate(pool: List<Agent>, agent: Agent, crossoverOdds: Double, mutateOdds: Dou
     return if (trialScore < agent.score) {
         Agent(xs = trial, score = trialScore)
     } else {
-        agent.copy()
+        agent
     }
 }
 
