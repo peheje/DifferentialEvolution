@@ -6,11 +6,11 @@ import kotlin.time.measureTime
 
 const val min = -10.0
 const val max = 10.0
-const val argsize = 100
+const val argsize = 1
 const val popsize = 200
-const val generations = 50_000
+const val generations = 10_000
 const val print = 1000
-val optimizer = ::f2
+val optimizer = ::findSqrt
 
 fun main() {
 
@@ -78,6 +78,12 @@ fun f2(xs: DoubleArray): Double {
     }
 
     return abs(s) + abs(p)
+}
+
+fun findSqrt(xs: DoubleArray): Double {
+    val c = xs[0]
+    val t = c * c - 54
+    return abs(t)
 }
 
 fun rastrigin(xs: DoubleArray): Double {
