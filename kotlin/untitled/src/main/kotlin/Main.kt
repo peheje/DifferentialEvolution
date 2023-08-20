@@ -1,15 +1,16 @@
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.random.Random
 import kotlin.time.measureTime
 
 const val min = -10.0
 const val max = 10.0
-const val argsize = 1000
+const val argsize = 100
 const val popsize = 200
 const val generations = 50_000
 const val print = 1000
-val optimizer = ::rastrigin
+val optimizer = ::f2
 
 fun main() {
 
@@ -65,7 +66,19 @@ fun mate(pool: List<Agent>, agent: Agent, crossoverOdds: Double, mutateOdds: Dou
     }
 }
 
-fun f1(xs: DoubleArray) = xs.sumOf { it * it }
+fun f1(xs: DoubleArray): Double = xs.sumOf { it * it }
+
+fun f2(xs: DoubleArray): Double {
+    var s = 0.0
+    var p = 1.0
+
+    for (i in xs.indices) {
+        s += abs(xs[i])
+        p *= xs[i]
+    }
+
+    return abs(s) + abs(p)
+}
 
 fun rastrigin(xs: DoubleArray): Double {
     val a = 10.0
