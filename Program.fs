@@ -6,6 +6,7 @@ let random = System.Random.Shared
 let rand () = random.NextDouble()
 let randomFloatRange max min = random.NextDouble() * (max - min) + min
 let randomInt max = random.Next(max)
+let randomIntRange min max = random.Next(min, max)
 
 type Agent = { xs: float array; score: float }
 
@@ -16,6 +17,7 @@ let sample agents =
 let print = 1000
 let optimizer = f1
 let argsize = 1000
+let splitMin, splitMax = 1, 100
 let min, max = -10.0, 10.0
 let generations = 10_000
 let popsize = 200
@@ -61,8 +63,8 @@ let rec loop generation pool =
 
         let next =
             pool
-            |> Array.chunkBySize 10
-            |> Array.map (fun chunk -> chunk |> Array.Parallel.map (mate chunk crossover mutate))
+            |> Array.chunkBySize (randomIntRange splitMin splitMax)
+            |> Array.Parallel.map (fun chunk -> chunk |> Array.map (mate chunk crossover mutate))
             |> Array.collect id
 
         // let next = pool |> Array.Parallel.map (mate pool crossover mutate)
