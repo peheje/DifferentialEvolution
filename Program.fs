@@ -1,6 +1,6 @@
 open Problems
 
-let sw = System.Diagnostics.Stopwatch.StartNew ()
+let sw = System.Diagnostics.Stopwatch.StartNew()
 
 let random = System.Random.Shared
 let rand () = random.NextDouble()
@@ -10,7 +10,7 @@ let randomInt max = random.Next(max)
 type Agent = { xs: float array; score: float }
 
 let sample agents =
-    let i = randomInt(agents |> Array.length)
+    let i = randomInt (agents |> Array.length)
     agents[i].xs
 
 let print = 1000
@@ -40,6 +40,7 @@ let mate pool crossover mutate agent =
                 agent.xs[j])
 
     let trialScore = optimizer trial
+
     if trialScore < agent.score then
         { xs = trial; score = trialScore }
     else
@@ -57,12 +58,17 @@ let rec loop generation pool =
     else
         let crossover = crossoverOdds ()
         let mutate = mutateOdds ()
-        let next = pool |> Array.Parallel.map (mate pool crossover mutate)
+
+        let next =
+            pool
+            |> Array.chunkBySize 10
+            |> Array.map (fun chunk -> chunk |> Array.Parallel.map (mate chunk crossover mutate))
+            |> Array.collect id
+
+        // let next = pool |> Array.Parallel.map (mate pool crossover mutate)
         loop (generation + 1) next
 
-let best =
-    loop 0 pool
-    |> Array.minBy (fun agent -> agent.score)
+let best = loop 0 pool |> Array.minBy (fun agent -> agent.score)
 
 printfn "generation best %A" best
 printfn "execution time %i ms" (sw.ElapsedMilliseconds)
