@@ -14,10 +14,10 @@ let sample agents =
     agents[i].xs
 
 let print = 1000
-let optimizer = rastrigin
+let optimizer = f1
 let argsize = 1000
 let min, max = -10.0, 10.0
-let generations = 20_000
+let generations = 20000
 let popsize = 200
 let crossoverOdds () = randomFloatRange 0.1 1.0
 let mutateOdds () = randomFloatRange 0.2 0.95
@@ -47,7 +47,7 @@ let mate pool crossover mutate agent =
 
 let rec loop generation pool =
     if generation % print = 0 then
-        let scores = pool |> Array.map (fun agent -> agent.score)
+        let scores = pool |> Array.map _.score
         printfn "generation %i" generation
         printfn "mean %f" (scores |> Array.average)
         printfn "minimum %f" (scores |> Array.min)
@@ -62,7 +62,7 @@ let rec loop generation pool =
 
 let best =
     loop 0 pool
-    |> Array.minBy (fun agent -> agent.score)
+    |> Array.minBy _.score
 
 printfn "generation best %A" best
 printfn "execution time %i ms" (sw.ElapsedMilliseconds)
