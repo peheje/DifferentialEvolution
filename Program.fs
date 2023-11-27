@@ -4,7 +4,7 @@ let sw = System.Diagnostics.Stopwatch.StartNew ()
 
 let random = System.Random.Shared
 let rand () = random.NextDouble()
-let randomFloatRange max min = random.NextDouble() * (max - min) + min
+let randomFloatRange max min = rand() * (max - min) + min
 let randomInt max = random.Next(max)
 
 type Agent = { xs: float array; score: float }
@@ -29,7 +29,7 @@ let createAgent () =
 
 let pool = Array.init popsize (fun _ -> createAgent ())
 
-let mate pool crossover mutate agent =
+let mate crossover mutate pool agent =
     let x0, x1, x2 = sample pool, sample pool, sample pool
 
     let trial =
@@ -55,9 +55,8 @@ let rec loop generation pool =
     if generation = generations then
         pool
     else
-        let crossover = crossoverOdds ()
-        let mutate = mutateOdds ()
-        let next = pool |> Array.Parallel.map (mate pool crossover mutate)
+        let mate' = mate (crossoverOdds()) (mutateOdds()) pool
+        let next = pool |> Array.Parallel.map mate'
         loop (generation + 1) next
 
 let best =
