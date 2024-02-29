@@ -4,7 +4,7 @@ let sw = System.Diagnostics.Stopwatch.StartNew()
 
 let random = System.Random.Shared
 let rand () = random.NextDouble()
-let randomFloatRange max min = rand () * (max - min) + min
+let randomFloatRange min max = rand () * (max - min) + min
 let randomInt max = random.Next(max)
 
 type Agent = { xs: float array; score: float }
