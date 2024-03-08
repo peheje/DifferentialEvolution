@@ -32,9 +32,9 @@ func clamp(x, min, max float64) float64 {
 	return x
 }
 
-func sample(pop *[popsize][params]float64) [params]float64 {
+func sample(pop *[popsize][params]float64) *[params]float64 {
 	idx := rand.IntN(len(pop))
-	return pop[idx]
+	return &pop[idx]
 }
 
 func minIndex(scores *[popsize]float64) int {
@@ -101,12 +101,9 @@ func main() {
 			go func() {
 				defer func() { <-semaphore }()
 				var trial [params]float64
-				var x0 [params]float64
-				var x1 [params]float64
-				var x2 [params]float64
-				x0 = sample(&pop)
-				x1 = sample(&pop)
-				x2 = sample(&pop)
+				x0 := sample(&pop)
+				x1 := sample(&pop)
+				x2 := sample(&pop)
 				xt := pop[i]
 
 				for j := range xt {
