@@ -60,7 +60,7 @@ func randRange(min float64, max float64) float64 {
 }
 
 func main() {
-	// f, err := os.Create("cpu.pprof")
+	// f, err := os.Create("default.pgo")
 	// if err != nil {
 	// 	panic(err)
 	// }
