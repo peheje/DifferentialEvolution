@@ -11,7 +11,7 @@ const (
 	popsize     = 200
 	generations = 20000
 	printEvery  = 1000
-	cpus        = 16
+	cpus        = 32
 )
 
 func f1(x *[params]float64) float64 {
