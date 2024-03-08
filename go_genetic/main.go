@@ -14,7 +14,7 @@ const (
 	cpus        = 32
 )
 
-func f1(x *[params]float64) float64 {
+func f1(x []float64) float64 {
 	var sum float64
 	for _, xi := range x {
 		sum += xi * xi
@@ -32,12 +32,12 @@ func clamp(x, min, max float64) float64 {
 	return x
 }
 
-func sample(pop *[popsize][params]float64) *[params]float64 {
+func sample(pop [][]float64) []float64 {
 	idx := rand.IntN(len(pop))
-	return &pop[idx]
+	return pop[idx]
 }
 
-func minIndex(scores *[popsize]float64) int {
+func minIndex(scores []float64) int {
 	minIdx := 0
 	for i, score := range scores {
 		if score < scores[minIdx] {
@@ -47,7 +47,7 @@ func minIndex(scores *[popsize]float64) int {
 	return minIdx
 }
 
-func mean(scores *[popsize]float64) float64 {
+func mean(scores []float64) float64 {
 	sum := 0.0
 	for _, score := range scores {
 		sum += score
@@ -77,17 +77,18 @@ func main() {
 	start := time.Now()
 
 	// Initialize population
-	var pop [popsize][params]float64
+	pop := make([][]float64, popsize)
 	for i := range pop {
+		pop[i] = make([]float64, params)
 		for j := range pop[i] {
 			pop[i][j] = bounds[0] + randRange(bounds[0], bounds[1])
 		}
 	}
 
 	// Evaluate initial population
-	var scores [popsize]float64
+	scores := make([]float64, popsize)
 	for i, p := range pop {
-		scores[i] = optimizer(&p)
+		scores[i] = optimizer(p)
 	}
 
 	// Optimization loop
@@ -100,10 +101,10 @@ func main() {
 			semaphore <- struct{}{}
 			go func() {
 				defer func() { <-semaphore }()
-				var trial [params]float64
-				x0 := sample(&pop)
-				x1 := sample(&pop)
-				x2 := sample(&pop)
+				trial := make([]float64, params)
+				x0 := sample(pop)
+				x1 := sample(pop)
+				x2 := sample(pop)
 				xt := pop[i]
 
 				for j := range xt {
@@ -114,9 +115,9 @@ func main() {
 					}
 				}
 
-				scoreTrial := optimizer(&trial)
+				scoreTrial := optimizer(trial)
 				if scoreTrial < scores[i] {
-					pop[i] = trial
+					copy(pop[i], trial)
 					scores[i] = scoreTrial
 				}
 			}()
@@ -124,14 +125,14 @@ func main() {
 
 		if g%printEvery == 0 || g == generations-1 {
 			fmt.Printf("Generation: %d\n", g)
-			fmt.Printf("Mean score: %f\n", mean(&scores))
-			fmt.Printf("Best score: %f\n", scores[minIndex(&scores)])
+			fmt.Printf("Mean score: %f\n", mean(scores))
+			fmt.Printf("Best score: %f\n", scores[minIndex(scores)])
 		}
 	}
 
-	best := pop[minIndex(&scores)]
+	best := pop[minIndex(scores)]
 	fmt.Println("Best solution:", best)
-	fmt.Println("Score:", scores[minIndex(&scores)])
+	fmt.Println("Score:", scores[minIndex(scores)])
 	fmt.Printf("Time taken: %s\n", time.Since(start))
 
 	// pprof.StopCPUProfile()
