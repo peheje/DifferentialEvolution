@@ -76,7 +76,6 @@ func main() {
 	optimizer := f1
 	start := time.Now()
 
-	// Initialize population
 	var scores [popsize]float64
 	var pop [popsize][params]float64
 	for i := range pop {
@@ -86,7 +85,6 @@ func main() {
 		scores[i] = optimizer(&pop[i])
 	}
 
-	// Optimization loop
 	semaphore := make(chan struct{}, cpus)
 	for g := 0; g < generations; g++ {
 		crossover := randRange(crossoverMin, crossoverMax)
