@@ -77,17 +77,13 @@ func main() {
 	start := time.Now()
 
 	// Initialize population
+	var scores [popsize]float64
 	var pop [popsize][params]float64
 	for i := range pop {
 		for j := range pop[i] {
 			pop[i][j] = randRange(boundsMin, boundsMax)
 		}
-	}
-
-	// Evaluate initial population
-	var scores [popsize]float64
-	for i, p := range pop {
-		scores[i] = optimizer(&p)
+		scores[i] = optimizer(&pop[i])
 	}
 
 	// Optimization loop
