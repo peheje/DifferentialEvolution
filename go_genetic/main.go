@@ -61,7 +61,7 @@ func mean(scores *[popsize]float64) float64 {
 	return sum / float64(len(scores))
 }
 
-func randRange(min float64, max float64) float64 {
+func randRange(min, max float64) float64 {
 	return rand.Float64()*(max-min) + min
 }
 
