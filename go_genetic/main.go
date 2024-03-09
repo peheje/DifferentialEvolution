@@ -7,11 +7,17 @@ import (
 )
 
 const (
-	params      = 1000
-	popsize     = 200
-	generations = 20000
-	printEvery  = 1000
-	cpus        = 32
+	params       = 1000
+	popsize      = 200
+	generations  = 20000
+	printEvery   = 1000
+	cpus         = 32
+	boundsMin    = -10.0
+	boundsMax    = 10.0
+	crossoverMin = 0.1
+	crossoverMax = 1.0
+	mutateMin    = 0.2
+	mutateMax    = 0.95
 )
 
 func f1(x *[params]float64) float64 {
@@ -67,20 +73,14 @@ func main() {
 	// pprof.StartCPUProfile(f)
 	// defer pprof.StopCPUProfile()
 
-	var (
-		optimizer      = f1
-		bounds         = [2]float64{-10.0, 10.0}
-		mutateRange    = [2]float64{0.2, 0.95}
-		crossoverRange = [2]float64{0.1, 1.0}
-	)
-
+	optimizer := f1
 	start := time.Now()
 
 	// Initialize population
 	var pop [popsize][params]float64
 	for i := range pop {
 		for j := range pop[i] {
-			pop[i][j] = bounds[0] + randRange(bounds[0], bounds[1])
+			pop[i][j] = randRange(boundsMin, boundsMax)
 		}
 	}
 
@@ -93,8 +93,8 @@ func main() {
 	// Optimization loop
 	semaphore := make(chan struct{}, cpus)
 	for g := 0; g < generations; g++ {
-		crossover := crossoverRange[0] + randRange(crossoverRange[0], crossoverRange[1])
-		mutate := mutateRange[0] + randRange(mutateRange[0], mutateRange[1])
+		crossover := randRange(crossoverMin, crossoverMax)
+		mutate := randRange(mutateMin, mutateMax)
 
 		for i := range pop {
 			semaphore <- struct{}{}
@@ -108,7 +108,7 @@ func main() {
 
 				for j := range xt {
 					if rand.Float64() < crossover {
-						trial[j] = clamp(x0[j]+(x1[j]-x2[j])*mutate, bounds[0], bounds[1])
+						trial[j] = clamp(x0[j]+(x1[j]-x2[j])*mutate, boundsMin, boundsMax)
 					} else {
 						trial[j] = xt[j]
 					}
