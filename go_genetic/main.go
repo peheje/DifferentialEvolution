@@ -123,9 +123,10 @@ func main() {
 		}
 	}
 
-	best := pop[minIndex(&scores)]
+	bestIndex := minIndex(&scores)
+	best := pop[bestIndex]
 	fmt.Println("Best solution:", best)
-	fmt.Println("Score:", scores[minIndex(&scores)])
+	fmt.Println("Score:", scores[bestIndex])
 	fmt.Printf("Time taken: %s\n", time.Since(start))
 
 	// pprof.StopCPUProfile()
