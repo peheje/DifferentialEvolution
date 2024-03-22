@@ -20,10 +20,12 @@ const (
 	mutateMax    = 0.95
 )
 
-func f1(x *[params]float64) float64 {
+type Agent = [params]float64
+
+func f1(xs *Agent) float64 {
 	var sum float64
-	for _, xi := range x {
-		sum += xi * xi
+	for _, x := range xs {
+		sum += x * x
 	}
 	return sum
 }
@@ -38,7 +40,7 @@ func clamp(x, min, max float64) float64 {
 	return x
 }
 
-func sample(pop *[popsize][params]float64) *[params]float64 {
+func sample(pop *[popsize]Agent) *Agent {
 	idx := rand.IntN(len(pop))
 	return &pop[idx]
 }
@@ -77,7 +79,7 @@ func main() {
 	start := time.Now()
 
 	var scores [popsize]float64
-	var pop [popsize][params]float64
+	var pop [popsize]Agent
 	for i := range pop {
 		for j := range pop[i] {
 			pop[i][j] = randRange(boundsMin, boundsMax)
@@ -94,7 +96,7 @@ func main() {
 			semaphore <- struct{}{}
 			go func() {
 				defer func() { <-semaphore }()
-				var trial [params]float64
+				var trial Agent
 				x0 := sample(&pop)
 				x1 := sample(&pop)
 				x2 := sample(&pop)
