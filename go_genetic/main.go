@@ -20,7 +20,7 @@ const (
 	mutateMax    = 0.95
 )
 
-type Agent = [params]float64
+type Agent [params]float64
 
 func f1(xs *Agent) float64 {
 	var sum float64
