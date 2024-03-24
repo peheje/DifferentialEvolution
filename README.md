@@ -1,11 +1,13 @@
 # Differential evolution algorithm
 Inspired by [this paper](https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.344.546&rep=rep1&type=pdf). (Jakob Vesterstram, Rene Thomsen, 2004)
 
+Implemented in F#, Kotlin and Go
+
 ## Usage
 
 Implement a function with signature float array -> float, the closer to 0 the function returns, the better the parameters fit.
 
-## Examples
+## Examples for the F# implementation
 
 Using these parameters:
 
