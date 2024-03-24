@@ -1,7 +1,7 @@
 # Differential evolution algorithm
 Inspired by [this paper](https://citeseerx.ist.psu.edu/viewdoc/download?doi=10.1.1.344.546&rep=rep1&type=pdf). (Jakob Vesterstram, Rene Thomsen, 2004)
 
-Implemented in F#, Kotlin and Go
+Implemented in various languages
 
 ## Usage
 
