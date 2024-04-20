@@ -87,6 +87,7 @@ func main() {
 		scores[i] = optimizer(&pop[i])
 	}
 
+	trials := [popsize]Agent{}
 	semaphore := make(chan struct{}, cpus)
 	for g := 0; g < generations; g++ {
 		crossover := randRange(crossoverMin, crossoverMax)
@@ -96,7 +97,6 @@ func main() {
 			semaphore <- struct{}{}
 			go func() {
 				defer func() { <-semaphore }()
-				var trial Agent
 				x0 := sample(&pop)
 				x1 := sample(&pop)
 				x2 := sample(&pop)
@@ -104,15 +104,15 @@ func main() {
 
 				for j := range xt {
 					if rand.Float64() < crossover {
-						trial[j] = clamp(x0[j]+(x1[j]-x2[j])*mutate, boundsMin, boundsMax)
+						trials[i][j] = clamp(x0[j]+(x1[j]-x2[j])*mutate, boundsMin, boundsMax)
 					} else {
-						trial[j] = xt[j]
+						trials[i][j] = xt[j]
 					}
 				}
 
-				scoreTrial := optimizer(&trial)
+				scoreTrial := optimizer(&trials[i])
 				if scoreTrial < scores[i] {
-					pop[i] = trial
+					pop[i] = trials[i]
 					scores[i] = scoreTrial
 				}
 			}()
