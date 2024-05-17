@@ -8,8 +8,8 @@ import (
 
 const (
 	params       = 1000
-	popsize      = 200
-	generations  = 20000
+	popsize      = 2000
+	generations  = 50000
 	printEvery   = 1000
 	cpus         = 32
 	boundsMin    = -10.0
