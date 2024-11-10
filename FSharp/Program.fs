@@ -10,8 +10,7 @@ let randomInt max = random.Next(max)
 type Agent = { xs: float array; score: float }
 
 let sample agents =
-    let i = randomInt (agents |> Array.length)
-    agents[i].xs
+    agents |> Array.randomChoice |> _.xs
 
 let print = 1000
 let optimizer = f1
