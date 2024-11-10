@@ -1,4 +1,5 @@
 open Problems
+open System.Threading.Tasks
 
 let sw = System.Diagnostics.Stopwatch.StartNew()
 
@@ -45,7 +46,7 @@ let mate crossover mutate pool agent =
     else
         agent
 
-let rec loop generation pool =
+let rec loop generation pool cpus =
     if generation % print = 0 then
         let scores = pool |> Array.map _.score
         printfn "generation %i" generation
@@ -56,10 +57,20 @@ let rec loop generation pool =
         pool
     else
         let mate' = mate (crossoverOdds ()) (mutateOdds ()) pool
-        let next = pool |> Array.Parallel.map mate'
-        loop (generation + 1) next
+        
+        let next = Array.zeroCreate pool.Length
+        Parallel.For(0, pool.Length, ParallelOptions(MaxDegreeOfParallelism = cpus), fun i ->
+            next[i] <- mate' pool[i]
+        ) |> ignore
 
-let best = loop 0 pool |> Array.minBy _.score
+        loop (generation + 1) next cpus
 
-printfn "generation best %A" best
-printfn "execution time %i ms" (sw.ElapsedMilliseconds)
+[<EntryPoint>]
+let main args =
+    let cpus = args[0] |> int
+    let best = loop 0 pool cpus |> Array.minBy _.score
+    printfn "generation best %A" best
+    printfn "execution time %i ms" (sw.ElapsedMilliseconds)
+    0
+
+
