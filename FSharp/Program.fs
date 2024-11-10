@@ -16,7 +16,7 @@ let popsize = 200
 let crossoverOdds () = randomFloatRange 0.1 1.0
 let mutateOdds () = randomFloatRange 0.2 0.95
 let clamp x = System.Math.Clamp(x, min, max)
-let pOptions = ParallelOptions(MaxDegreeOfParallelism = 128)
+let pOptions = ParallelOptions(MaxDegreeOfParallelism = 64)
 
 let pop = Array.init popsize (fun _ -> Array.init argsize (fun _ -> randomFloatRange min max))
 let scores = pop |> Array.map optimizer
