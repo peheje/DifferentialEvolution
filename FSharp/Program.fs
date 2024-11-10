@@ -6,12 +6,6 @@ let sw = System.Diagnostics.Stopwatch.StartNew()
 let random = System.Random.Shared
 let rand () = random.NextDouble()
 let randomFloatRange min max = rand () * (max - min) + min
-let randomInt max = random.Next(max)
-
-type Agent = { xs: float array; score: float }
-
-let sample agents =
-    agents |> Array.randomChoice |> _.xs
 
 let print = 1000
 let optimizer = f1
@@ -22,55 +16,38 @@ let popsize = 200
 let crossoverOdds () = randomFloatRange 0.1 1.0
 let mutateOdds () = randomFloatRange 0.2 0.95
 let clamp x = System.Math.Clamp(x, min, max)
+let pOptions = ParallelOptions(MaxDegreeOfParallelism = 128)
 
-let createAgent () =
-    let xs = Array.init argsize (fun _ -> randomFloatRange min max)
-    { xs = xs; score = optimizer xs }
+let pop = Array.init popsize (fun _ -> Array.init argsize (fun _ -> randomFloatRange min max))
+let scores = pop |> Array.map optimizer
+let trials = Array.init popsize (fun _ -> Array.zeroCreate argsize)
 
-let pool = Array.init popsize (fun _ -> createAgent ())
+for g in 0..generations do
+    let crossover = crossoverOdds ()
+    let mutate = mutateOdds ()
 
-let mate crossover mutate pool agent =
-    let x0, x1, x2 = sample pool, sample pool, sample pool
+    Parallel.For(0, popsize, pOptions, fun i ->
+        let x0 = pop |> Array.randomChoice
+        let x1 = pop |> Array.randomChoice
+        let x2 = pop |> Array.randomChoice
+        let xt = pop[i]
 
-    let trial =
-        Array.init argsize (fun j ->
+        for j in 0..argsize-1 do
             if rand () < crossover then
-                x0[j] + (x1[j] - x2[j]) * mutate |> clamp
+                trials[i][j] <- x0[j] + (x1[j] - x2[j]) * mutate |> clamp
             else
-                agent.xs[j])
+                trials[i][j] <- xt[j]
 
-    let trialScore = optimizer trial
+        let trialScore = optimizer trials[i]
 
-    if trialScore < agent.score then
-        { xs = trial; score = trialScore }
-    else
-        agent
+        if trialScore < scores[i] then
+            pop[i] <- trials[i] |> Array.copy
+            scores[i] <- trialScore
+    ) |> ignore
 
-let rec loop generation pool cpus =
-    if generation % print = 0 then
-        let scores = pool |> Array.map _.score
-        printfn "generation %i" generation
+    if g % print = 0 then
+        printfn "generation %i" g
         printfn "mean %f" (scores |> Array.average)
         printfn "minimum %f" (scores |> Array.min)
 
-    if generation = generations then
-        pool
-    else
-        let mate' = mate (crossoverOdds ()) (mutateOdds ()) pool
-        
-        let next = Array.zeroCreate pool.Length
-        Parallel.For(0, pool.Length, ParallelOptions(MaxDegreeOfParallelism = cpus), fun i ->
-            next[i] <- mate' pool[i]
-        ) |> ignore
-
-        loop (generation + 1) next cpus
-
-[<EntryPoint>]
-let main args =
-    let cpus = args[0] |> int
-    let best = loop 0 pool cpus |> Array.minBy _.score
-    printfn "generation best %A" best
-    printfn "execution time %i ms" (sw.ElapsedMilliseconds)
-    0
-
-
+printfn "execution time %i ms" (sw.ElapsedMilliseconds)
