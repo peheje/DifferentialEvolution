@@ -11,15 +11,9 @@ var pOptions = new ParallelOptions { MaxDegreeOfParallelism = 64 };
 
 var sw = Stopwatch.StartNew();
 
-var pop = new double[popsize][];
-var scores = new double[popsize];
-var trials = new double[popsize][];
-for (var i = 0; i < popsize; i++)
-{
-    pop[i] = Enumerable.Range(0, argsize).Select(_ => RandomFloatRange(min, max)).ToArray();
-    trials[i] = new double[argsize];
-    scores[i] = optimizer(pop[i]);
-}
+var pop = Enumerable.Range(0, popsize).Select(_ => Enumerable.Range(0, argsize).Select(_ => RandomFloatRange(min, max)).ToArray()).ToArray();
+var scores = Enumerable.Range(0, popsize).Select(i => optimizer(pop[i])).ToArray();
+var trials = Enumerable.Range(0, popsize).Select(_ => new double[argsize]).ToArray();
 
 for (var g = 0; g <= generations; g++)
 {
@@ -28,9 +22,9 @@ for (var g = 0; g <= generations; g++)
 
     Parallel.For(0, popsize, pOptions, i =>
     {
-        var x0 = pop[Random.Shared.Next(popsize)];
-        var x1 = pop[Random.Shared.Next(popsize)];
-        var x2 = pop[Random.Shared.Next(popsize)];
+        var x0 = Sample(pop);
+        var x1 = Sample(pop);
+        var x2 = Sample(pop);
         var xt = pop[i];
 
         for (var j = 0; j < argsize; j++)
@@ -74,3 +68,5 @@ double MutateOdds() => RandomFloatRange(0.2, 0.95);
 double Clamp(double x) => Math.Clamp(x, min, max);
 
 double RandomFloatRange(double minn, double maxx) => Random.Shared.NextDouble() * (maxx - minn) + minn;
+
+static T Sample<T>(IList<T> source) => source[Random.Shared.Next(source.Count)];
