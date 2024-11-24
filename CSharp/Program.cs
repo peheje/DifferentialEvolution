@@ -7,7 +7,7 @@ const double max = 10.0;
 const int generations = 20000;
 const int popsize = 200;
 const int print = 1000;
-ParallelOptions pOptions = new() { MaxDegreeOfParallelism = 64 };
+var pOptions = new ParallelOptions { MaxDegreeOfParallelism = 64 };
 
 var sw = Stopwatch.StartNew();
 
