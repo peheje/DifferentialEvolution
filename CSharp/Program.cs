@@ -52,7 +52,7 @@ for (var g = 0; g <= generations; g++)
     }
 }
 
-var bestIndex = Array.IndexOf(scores, scores.Min());
+var bestIndex = scores.Select((value, index) => (value, index)).MaxBy(x => x.value).index;
 var best = pop[bestIndex];
 Console.WriteLine($"best [{string.Join(", ", best)}]");
 Console.WriteLine($"score {scores[bestIndex]:F6}");
