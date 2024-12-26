@@ -1,4 +1,10 @@
-﻿using System.Diagnostics;
+﻿using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Linq;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 
 var optimizer = F1;
 const int argsize = 1000;
@@ -54,12 +60,51 @@ for (var g = 0; g <= generations; g++)
 
 var bestIndex = scores.Select((value, index) => (value, index)).MaxBy(x => x.value).index;
 var best = pop[bestIndex];
+
+sw.Stop();
+
 Console.WriteLine($"best [{string.Join(", ", best)}]");
 Console.WriteLine($"score {scores[bestIndex]:F6}");
 Console.WriteLine($"execution time {sw.ElapsedMilliseconds} ms");
 return;
 
-double F1(double[] args) => args.Sum(x => x * x);
+double F2(double[] args)
+{
+    var sum = 0.0;
+    foreach (var x in args)
+    {
+        sum += x * x;
+    }
+
+    return sum;
+}
+
+[MethodImpl(MethodImplOptions.AggressiveInlining)]
+static double F1(double[] args)
+{
+    var vectorSize = Vector<double>.Count;
+    var i = 0;
+    var sumVector = Vector<double>.Zero;
+
+    for (; i <= args.Length - vectorSize; i += vectorSize)
+    {
+        var vector = new Vector<double>(args, i);
+        sumVector += vector * vector;
+    }
+
+    double sum = 0;
+    for (int j = 0; j < vectorSize; j++)
+    {
+        sum += sumVector[j];
+    }
+
+    for (; i < args.Length; i++)
+    {
+        sum += args[i] * args[i];
+    }
+
+    return sum;
+}
 
 double CrossoverOdds() => RandomFloatRange(0.1, 1.0);
 
