@@ -46,12 +46,12 @@ for g in 0..generations do
     ) |> ignore
 
     if g % print = 0 then
-        printfn "generation %i" g
-        printfn "mean %f" (scores |> Array.average)
-        printfn "minimum %f" (scores |> Array.min)
+        printfn $"generation %i{g}"
+        printfn $"mean %f{scores |> Array.average}"
+        printfn $"minimum %f{scores |> Array.min}"
 
 let bestIndex = scores |> Array.indexed |> Array.minBy snd |> fst
 let best = pop[bestIndex]
-printfn "best %A" best
-printfn "score %A" scores[bestIndex]
-printfn "execution time %i ms" (sw.ElapsedMilliseconds)
+printfn $"best %A{best}"
+printfn $"score %A{scores[bestIndex]}"
+printfn $"execution time %i{sw.ElapsedMilliseconds} ms"
