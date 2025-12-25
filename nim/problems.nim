@@ -50,7 +50,7 @@ proc f3*(x: openarray[float]): float =
   for i in 0..<len(x):
     var ss = 0.0
     for j in 0..<i+1:
-      ss += x[i]
+      ss += x[j]
     result += ss*ss
 
 # In League of Legends, a player's Effective Health when defending against physical damage is given by E=H(100+A)/100, where H is health and A is armor. Health costs 2.5 gold per unit, and Armor costs 18 gold per unit. You have 3600 gold, and you need to optimize the effectiveness E of your health and armor to survive as long as possible against the enemy team's attacks. How much of each should you buy?
