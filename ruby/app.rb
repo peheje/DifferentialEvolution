@@ -66,9 +66,7 @@ module Problems
       ss = 0.0
       j = 0
       while j < i + 1
-        # Translating your Nim logic exactly: ss += x[i]
-        # (Standard benchmark usually sums x[j], but keeping your logic)
-        ss += x[i] 
+        ss += x[j] 
         j += 1
       end
       result += ss * ss
