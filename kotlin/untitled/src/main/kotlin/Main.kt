@@ -24,7 +24,7 @@ fun algorithm() {
     val indices = (0 until popsize).toList()
     repeat(generations) { g ->
         if (g % print == 0) {
-            val scores = pool.map { it.score }kotlinc Main.kt -include-runtime -d run.jar && java -jar run.jar && rm run.jar
+            val scores = pool.map { it.score }
             println("Generation $g")
             println("Mean ${scores.average()}")
             println("Min ${scores.min()}")
