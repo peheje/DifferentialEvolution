@@ -6,11 +6,11 @@ import kotlin.time.measureTime
 
 const val min = -10.0
 const val max = 10.0
-const val argsize = 1
+const val argsize = 1000
 const val popsize = 200
-const val generations = 10_000
-const val print = 1000
-val optimizer = ::findSqrt
+const val generations = 20000
+const val print = 20000
+val optimizer = ::f1
 
 fun main() {
 
