@@ -14,14 +14,13 @@ val optimizer = ::f1
 
 fun main() {
 
-    measureTime {
-        algorithm()
-    }.let { println("Elapsed: ${it.inWholeMilliseconds}ms") }
-
+    measureTime { algorithm() }.let { println("Elapsed: ${it.inWholeMilliseconds}ms") }
 }
 
 private fun algorithm() {
-    var pool = List(popsize) { createAgent() }
+    val pool = List(popsize) { createAgent() }
+    val trials = Array(popsize) { DoubleArray(argsize) }
+    val indices = (0 until popsize).toList()
 
     repeat(generations) { g ->
         if (g % print == 0) {
@@ -33,8 +32,8 @@ private fun algorithm() {
 
         val crossover = Random.nextDouble(0.1, 1.0)
         val mutate = Random.nextDouble(0.2, 0.95)
-        val next = pool.parallelStream().map { mate(pool, it, crossover, mutate) }
-        pool = next.toList()
+
+        indices.parallelStream().forEach { i -> mate(pool, pool[i], trials[i], crossover, mutate) }
     }
 
     val best = pool.minBy { it.score }
@@ -42,27 +41,32 @@ private fun algorithm() {
     println("score: ${best.score}")
 }
 
-data class Agent(val xs: DoubleArray, val score: Double)
+class Agent(val xs: DoubleArray, var score: Double)
 
-fun mate(pool: List<Agent>, agent: Agent, crossoverOdds: Double, mutateOdds: Double): Agent {
+fun mate(
+        pool: List<Agent>,
+        agent: Agent,
+        trial: DoubleArray,
+        crossoverOdds: Double,
+        mutateOdds: Double
+) {
 
     val x0 = pool.random().xs
     val x1 = pool.random().xs
     val x2 = pool.random().xs
 
-    val trial = DoubleArray(argsize) { i ->
+    for (i in 0 until argsize) {
         if (Random.nextDouble() < crossoverOdds) {
-            (x0[i] + (x1[i] - x2[i]) * mutateOdds).coerceIn(min, max)
+            trial[i] = (x0[i] + (x1[i] - x2[i]) * mutateOdds).coerceIn(min, max)
         } else {
-            agent.xs[i]
+            trial[i] = agent.xs[i]
         }
     }
 
     val trialScore = optimizer(trial)
-    return if (trialScore < agent.score) {
-        Agent(xs = trial, score = trialScore)
-    } else {
-        agent
+    if (trialScore < agent.score) {
+        System.arraycopy(trial, 0, agent.xs, 0, argsize)
+        agent.score = trialScore
     }
 }
 
@@ -88,7 +92,7 @@ fun findSqrt(xs: DoubleArray): Double {
 
 fun rastrigin(xs: DoubleArray): Double {
     val a = 10.0
-    val sum = xs.sumOf { (it*it) - (a * cos(2.0 * PI * it)) }
+    val sum = xs.sumOf { (it * it) - (a * cos(2.0 * PI * it)) }
     return a * xs.size + sum
 }
 
