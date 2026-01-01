@@ -79,8 +79,9 @@ double F2(double[] args)
     return sum;
 }
 
+// This is the optimized SIMD implementation
 [MethodImpl(MethodImplOptions.AggressiveInlining)]
-static double F1(double[] args)
+static double F1_Optimized(double[] args)
 {
     var vectorSize = Vector<double>.Count;
     var i = 0;
@@ -99,6 +100,20 @@ static double F1(double[] args)
     }
 
     for (; i < args.Length; i++)
+    {
+        sum += args[i] * args[i];
+    }
+
+    return sum;
+}
+
+// This is the standard, non-SIMD implementation
+static double F1(double[] args)
+{
+    double sum = 0.0;
+    
+    // Standard loop without vectorization
+    for (int i = 0; i < args.Length; i++)
     {
         sum += args[i] * args[i];
     }
