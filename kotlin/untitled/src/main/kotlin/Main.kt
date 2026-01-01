@@ -13,7 +13,7 @@ const val print = 20000
 val optimizer = ::f1
 
 fun main() {
-
+    // kotlinc Main.kt -include-runtime -d run.jar && java -jar run.jar && rm run.jar
     measureTime { algorithm() }.let { println("Elapsed: ${it.inWholeMilliseconds}ms") }
 }
 
