@@ -1,3 +1,4 @@
+// https://nchagnet.pages.dev/blog/pokemon-team-optimization/
 package main
 
 import (
