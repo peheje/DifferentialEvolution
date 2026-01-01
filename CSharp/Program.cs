@@ -68,17 +68,6 @@ Console.WriteLine($"score {scores[bestIndex]:F6}");
 Console.WriteLine($"execution time {sw.ElapsedMilliseconds} ms");
 return;
 
-double F2(double[] args)
-{
-    var sum = 0.0;
-    foreach (var x in args)
-    {
-        sum += x * x;
-    }
-
-    return sum;
-}
-
 // This is the optimized SIMD implementation
 [MethodImpl(MethodImplOptions.AggressiveInlining)]
 static double F1_Optimized(double[] args)
@@ -107,12 +96,10 @@ static double F1_Optimized(double[] args)
     return sum;
 }
 
-// This is the standard, non-SIMD implementation
 static double F1(double[] args)
 {
     double sum = 0.0;
     
-    // Standard loop without vectorization
     for (int i = 0; i < args.Length; i++)
     {
         sum += args[i] * args[i];
