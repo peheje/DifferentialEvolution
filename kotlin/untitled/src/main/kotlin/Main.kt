@@ -17,11 +17,10 @@ fun main() {
     measureTime { algorithm() }.let { println("Elapsed: ${it.inWholeMilliseconds}ms") }
 }
 
-private fun algorithm() {
+fun algorithm() {
     val pool = List(popsize) { createAgent() }
     val trials = Array(popsize) { DoubleArray(argsize) }
     val indices = (0 until popsize).toList()
-
     repeat(generations) { g ->
         if (g % print == 0) {
             val scores = pool.map { it.score }
