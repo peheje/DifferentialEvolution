@@ -38,9 +38,8 @@ let rastrigin (xs: float array) =
     let sum = xs |> Array.sumBy (fun x -> (square x) - (a * cos (2.0 * pi * x)))
 
     a * n + sum
-
 // f1(0..) = 0
-let f1 (xs: float array) = xs |> Array.sumBy (fun x -> x * x)
+let f1 (xs: float array) = xs |> Array.sumBy square
 
 // f2(0..) = 0
 let f2 (xs: float array) =

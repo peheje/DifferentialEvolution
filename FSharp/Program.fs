@@ -7,7 +7,7 @@ let random = System.Random.Shared
 let rand () = random.NextDouble()
 let randomFloatRange min max = rand () * (max - min) + min
 
-let print = 1000
+let print = 20000
 let optimizer = f1
 let argsize = 1000
 let min, max = -10.0, 10.0
@@ -41,7 +41,7 @@ for g in 0..generations do
         let trialScore = optimizer trials[i]
 
         if trialScore < scores[i] then
-            pop[i] <- trials[i] |> Array.copy
+            System.Array.Copy(trials[i], pop[i], argsize)
             scores[i] <- trialScore
     ) |> ignore
 
