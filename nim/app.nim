@@ -58,7 +58,7 @@ for g in 0..<generations:
 
     # Replace current if better
     if score_trial < scores[i]:
-      pop[i] = trial
+      pop[i] = @trial
       scores[i] = score_trial
 
   if g mod print == 0 or g == generations-1:
