@@ -39,3 +39,6 @@ msbuild.wrn
 
 # Local benchmark binaries
 c_fast/de_c
+
+# Crystal compiler cache artifacts
+crystal/.crystal/

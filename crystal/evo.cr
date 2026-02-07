@@ -7,10 +7,10 @@ end
 
 start_dt = Time.utc
 
-print_each = 1000
-params = 300
+print_each = 20000
+params = 1000
 bounds = -10.0..10.0
-generations = 5000
+generations = 20000
 pop_size = 200
 mutate_range = 0.2..0.95
 crossover_range = 0.1..1.0
@@ -33,10 +33,14 @@ generations.times do |g|
     mean = scores.sum / pop_size
     puts "GEN #{g}"
     puts "MEAN #{mean}"
-    #best = scores.min
-    #puts "BEST #{best.xs}"
+    puts "MIN #{scores.min}"
   end
 end
 
+best_score = scores.min
+best_index = scores.index(best_score).not_nil!
+best = pop[best_index]
+
 end_dt = Time.utc
-puts end_dt - start_dt
+puts "score #{best_score}"
+puts "execution time #{((end_dt - start_dt).total_milliseconds).to_i} ms"
