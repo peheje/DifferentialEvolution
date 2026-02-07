@@ -22,7 +22,7 @@ let pop = Array.init popsize (fun _ -> Array.init argsize (fun _ -> randomFloatR
 let scores = pop |> Array.map optimizer
 let trials = Array.init popsize (fun _ -> Array.zeroCreate argsize)
 
-for g in 0..generations do
+for g in 0..generations-1 do
     let crossover = crossoverOdds ()
     let mutate = mutateOdds ()
 

@@ -36,3 +36,6 @@ msbuild.wrn
 # Visual Studio 2015
 .vs/
 .fake
+
+# Local benchmark binaries
+c_fast/de_c

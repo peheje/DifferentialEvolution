@@ -11,11 +11,11 @@ import problems
 let start = cpuTime()
 const
   log_csv = false
-  print = 1000
+  print = 20_000
   optimizer = f1
   params = 1000
   bounds = -10.0..10.0
-  generations = 10_000
+  generations = 20_000
   popsize = 200
   mutate_range = 0.2..0.95
   crossover_range = 0.1..1.0

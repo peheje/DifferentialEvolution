@@ -11,7 +11,7 @@ const (
 	params       = 1000
 	popsize      = 200
 	generations  = 20000
-	printEvery   = 1000
+	printEvery   = 20000
 	cpus         = 32
 	boundsMin    = -10.0
 	boundsMax    = 10.0

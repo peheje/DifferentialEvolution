@@ -10,9 +10,9 @@ var optimizer = F1;
 const int argsize = 1000;
 const double min = -10.0;
 const double max = 10.0;
-const int generations = 60000;
+const int generations = 20000;
 const int popsize = 200;
-const int print = 60000;
+const int print = 20000;
 var pOptions = new ParallelOptions { MaxDegreeOfParallelism = 64 };
 
 var sw = Stopwatch.StartNew();
@@ -21,7 +21,7 @@ var pop = Enumerable.Range(0, popsize).Select(_ => Enumerable.Range(0, argsize).
 var scores = Enumerable.Range(0, popsize).Select(i => optimizer(pop[i])).ToArray();
 var trials = Enumerable.Range(0, popsize).Select(_ => new double[argsize]).ToArray();
 
-for (var g = 0; g <= generations; g++)
+for (var g = 0; g < generations; g++)
 {
     var crossover = CrossoverOdds();
     var mutate = MutateOdds();
