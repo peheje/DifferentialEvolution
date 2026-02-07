@@ -10,9 +10,9 @@ var optimizer = F1;
 const int argsize = 1000;
 const double min = -10.0;
 const double max = 10.0;
-const int generations = 20000;
+const int generations = 60000;
 const int popsize = 200;
-const int print = 20000;
+const int print = 60000;
 var pOptions = new ParallelOptions { MaxDegreeOfParallelism = 64 };
 
 var sw = Stopwatch.StartNew();
@@ -58,7 +58,7 @@ for (var g = 0; g <= generations; g++)
     }
 }
 
-var bestIndex = scores.Select((value, index) => (value, index)).MaxBy(x => x.value).index;
+var bestIndex = scores.Select((value, index) => (value, index)).MinBy(x => x.value).index;
 var best = pop[bestIndex];
 
 sw.Stop();
