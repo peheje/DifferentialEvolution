@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math/rand/v2"
+	"sync"
 	"time"
 )
 
@@ -92,10 +93,13 @@ func main() {
 	for g := 0; g < generations; g++ {
 		crossover := randRange(crossoverMin, crossoverMax)
 		mutate := randRange(mutateMin, mutateMax)
+		var wg sync.WaitGroup
 
 		for i := range pop {
+			wg.Add(1)
 			semaphore <- struct{}{}
-			go func() {
+			go func(i int) {
+				defer wg.Done()
 				defer func() { <-semaphore }()
 				x0 := sample(&pop)
 				x1 := sample(&pop)
@@ -115,8 +119,9 @@ func main() {
 					pop[i] = trials[i]
 					scores[i] = scoreTrial
 				}
-			}()
+			}(i)
 		}
+		wg.Wait()
 
 		if g%printEvery == 0 || g == generations-1 {
 			fmt.Printf("Generation: %d\n", g)
