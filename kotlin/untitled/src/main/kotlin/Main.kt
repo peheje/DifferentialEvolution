@@ -4,15 +4,29 @@ import kotlin.math.cos
 import kotlin.random.Random
 import kotlin.time.measureTime
 
-val people = arrayOf("A", "B", "C")
-val initialBalances = doubleArrayOf(40.0, -10.0, -30.0)
-val paymentPairs = people.indices
-    .flatMap { from -> people.indices.filter { it != from }.map { to -> from to to } }
-    .toTypedArray()
+data class SettlementProblem(
+    val people: Array<String>,
+    val initialBalances: DoubleArray,
+) {
+    val paymentPairs: Array<Pair<Int, Int>> = people.indices
+        .flatMap { from -> people.indices.filter { it != from }.map { to -> from to to } }
+        .toTypedArray()
+
+    val maxPayment: Double = initialBalances.sumOf { if (it > 0.0) it else 0.0 }
+}
+
+val defaultSettlementProblem = SettlementProblem(
+    people = arrayOf("A", "B", "C"),
+    initialBalances = doubleArrayOf(40.0, -10.0, -30.0),
+)
+var settlementProblem = defaultSettlementProblem
+val people get() = settlementProblem.people
+val initialBalances get() = settlementProblem.initialBalances
+val paymentPairs get() = settlementProblem.paymentPairs
 
 const val min = 0.0
-const val max = 40.0
-val argsize = paymentPairs.size
+val max get() = settlementProblem.maxPayment
+val argsize get() = paymentPairs.size
 const val popsize = 200
 const val generations = 20000
 const val print = 2000
