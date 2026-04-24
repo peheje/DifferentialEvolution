@@ -1,6 +1,7 @@
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
+import kotlin.math.sqrt
 import kotlin.random.Random
 import kotlin.time.measureTime
 
@@ -9,7 +10,8 @@ data class SettlementProblem(
     val initialBalances: DoubleArray,
 ) {
     val paymentPairs: Array<Pair<Int, Int>> = people.indices
-        .flatMap { from -> people.indices.filter { it != from }.map { to -> from to to } }
+        .filter { initialBalances[it] < 0.0 }
+        .flatMap { from -> people.indices.filter { initialBalances[it] > 0.0 }.map { to -> from to to } }
         .toTypedArray()
 
     val maxPayment: Double = initialBalances.sumOf { if (it > 0.0) it else 0.0 }
@@ -126,8 +128,9 @@ fun settleTrip(xs: DoubleArray): Double {
     val balanceError = finalBalances.sumOf { abs(it) }
     val transactionCount = xs.count { it > 0.01 }
     val moneyMoved = xs.sum()
+    val splitPenalty = xs.sumOf { sqrt(it) }
 
-    return balanceError * 1_000_000.0 + transactionCount + moneyMoved * 0.001
+    return balanceError * 1_000_000.0 + transactionCount + moneyMoved * 0.001 + splitPenalty * 0.1
 }
 
 fun finalBalances(xs: DoubleArray): DoubleArray {
