@@ -4,13 +4,19 @@ import kotlin.math.cos
 import kotlin.random.Random
 import kotlin.time.measureTime
 
-const val min = -10.0
-const val max = 10.0
-const val argsize = 1000
+val people = arrayOf("A", "B", "C")
+val initialBalances = doubleArrayOf(40.0, -10.0, -30.0)
+val paymentPairs = people.indices
+    .flatMap { from -> people.indices.filter { it != from }.map { to -> from to to } }
+    .toTypedArray()
+
+const val min = 0.0
+const val max = 40.0
+val argsize = paymentPairs.size
 const val popsize = 200
 const val generations = 20000
-const val print = 20000
-val optimizer = ::f1
+const val print = 2000
+val optimizer = ::settleTrip
 
 fun main() {
     // source "$HOME/.sdkman/bin/sdkman-init.sh"
@@ -18,12 +24,12 @@ fun main() {
     measureTime { algorithm() }.let { println("Elapsed: ${it.inWholeMilliseconds}ms") }
 }
 
-fun algorithm() {
+fun algorithm(verbose: Boolean = true): Agent {
     val pool = List(popsize) { createAgent() }
     val trials = Array(popsize) { DoubleArray(argsize) }
     val indices = (0 until popsize).toList()
     repeat(generations) { g ->
-        if (g % print == 0) {
+        if (verbose && g % print == 0) {
             val scores = pool.map { it.score }
             println("Generation $g")
             println("Mean ${scores.average()}")
@@ -37,8 +43,13 @@ fun algorithm() {
     }
 
     val best = pool.minBy { it.score }
-    println("Generation best ${best.xs.contentToString()}")
-    println("score: ${best.score}")
+    if (verbose) {
+        println("Generation best ${best.xs.contentToString()}")
+        println("score: ${best.score}")
+        printSettlement(best.xs)
+    }
+
+    return best
 }
 
 class Agent(val xs: DoubleArray, var score: Double)
@@ -94,6 +105,41 @@ fun rastrigin(xs: DoubleArray): Double {
     val a = 10.0
     val sum = xs.sumOf { (it * it) - (a * cos(2.0 * PI * it)) }
     return a * xs.size + sum
+}
+
+fun settleTrip(xs: DoubleArray): Double {
+    val finalBalances = finalBalances(xs)
+    val balanceError = finalBalances.sumOf { abs(it) }
+    val transactionCount = xs.count { it > 0.01 }
+    val moneyMoved = xs.sum()
+
+    return balanceError * 1_000_000.0 + transactionCount + moneyMoved * 0.001
+}
+
+fun finalBalances(xs: DoubleArray): DoubleArray {
+    val balances = initialBalances.copyOf()
+
+    for (i in paymentPairs.indices) {
+        val amount = xs[i]
+        val (from, to) = paymentPairs[i]
+        balances[from] += amount
+        balances[to] -= amount
+    }
+
+    return balances
+}
+
+fun printSettlement(xs: DoubleArray) {
+    println("Payments:")
+    for (i in paymentPairs.indices) {
+        val amount = xs[i]
+        if (amount > 0.01) {
+            val (from, to) = paymentPairs[i]
+            println("${people[from]} pays ${people[to]}: ${String.format("%.2f", amount)}")
+        }
+    }
+
+    println("Final balances: ${finalBalances(xs).contentToString()}")
 }
 
 fun createAgent(): Agent {
