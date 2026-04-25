@@ -39,6 +39,14 @@ msbuild.wrn
 
 # Local benchmark binaries
 c_fast/de_c
+c_fast/settlement
+go_genetic/de_go
+nim/de_nim
+kotlin/untitled/src/main/kotlin/*.jar
 
 # Crystal compiler cache artifacts
 crystal/.crystal/
+crystal/de_crystal
+
+# Local Codex scratch marker
+.codex
