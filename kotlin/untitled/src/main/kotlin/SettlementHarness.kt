@@ -44,6 +44,21 @@ fun main() {
             ),
             expectedPayments = emptyList(),
         ),
+        SettlementScenario(
+            name = "twenty people, ten independent pairs",
+            problem = SettlementProblem(
+                people = arrayOf(
+                    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J",
+                    "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T",
+                ),
+                initialBalances = doubleArrayOf(
+                    10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0,
+                    -10.0, -20.0, -30.0, -40.0, -50.0, -60.0, -70.0, -80.0, -90.0, -100.0,
+                ),
+            ),
+            expectedTransactionCount = 10,
+            expectedPayments = emptyList(),
+        ),
     )
 
     scenarios.forEach(::runScenario)
@@ -55,8 +70,9 @@ private fun runScenario(scenario: SettlementScenario) {
     val best = (1..scenario.attempts)
         .map { algorithm(verbose = false) }
         .minBy { it.score }
+    val payments = decodePaymentPriorities(best.xs)
     val balances = finalBalances(best.xs)
-    val transactionCount = best.xs.count { it > 0.01 }
+    val transactionCount = payments.count { it > 0.01 }
     val expectedTransactionCount = scenario.expectedTransactionCount
         ?: exactMinimumTransactionCount(scenario.problem.initialBalances)
 
@@ -68,7 +84,7 @@ private fun runScenario(scenario: SettlementScenario) {
         "${scenario.name}: expected exactly $expectedTransactionCount transactions, got $transactionCount from ${best.xs.contentToString()}"
     }
 
-    scenario.expectedPayments.forEach { assertPayment(best.xs, it) }
+    scenario.expectedPayments.forEach { assertPayment(payments, it) }
 
     println("Settlement scenario passed: ${scenario.name}")
     println("Score: ${best.score}")

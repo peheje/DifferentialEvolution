@@ -132,10 +132,11 @@ fun rastrigin(xs: DoubleArray): Double {
 }
 
 fun settleTrip(xs: DoubleArray): Double {
-    val totalUnsettledBalance = finalBalances(xs).sumOf { abs(it) }
-    val numberOfRealTransactions = xs.count { it > minimumTransactionAmount }
-    val smoothApproximationOfTransactionCount = xs.sumOf { it / (it + softTransactionScale) }
-    val totalMoneyMoved = xs.sum()
+    val payments = decodePaymentPriorities(xs)
+    val totalUnsettledBalance = finalBalancesFromPayments(payments).sumOf { abs(it) }
+    val numberOfRealTransactions = payments.count { it > minimumTransactionAmount }
+    val smoothApproximationOfTransactionCount = payments.sumOf { it / (it + softTransactionScale) }
+    val totalMoneyMoved = payments.sum()
 
     return if (totalUnsettledBalance > settledEnoughBalanceTolerance) {
         val balanceIsStillTheOnlyThingThatMatters = totalUnsettledBalance * unsettledBalancePenalty
@@ -155,10 +156,14 @@ fun settleTrip(xs: DoubleArray): Double {
 }
 
 fun finalBalances(xs: DoubleArray): DoubleArray {
+    return finalBalancesFromPayments(decodePaymentPriorities(xs))
+}
+
+fun finalBalancesFromPayments(payments: DoubleArray): DoubleArray {
     val balances = initialBalances.copyOf()
 
     for (i in paymentPairs.indices) {
-        val amount = xs[i]
+        val amount = payments[i]
         val (from, to) = paymentPairs[i]
         balances[from] += amount
         balances[to] -= amount
@@ -168,9 +173,10 @@ fun finalBalances(xs: DoubleArray): DoubleArray {
 }
 
 fun printSettlement(xs: DoubleArray) {
+    val payments = decodePaymentPriorities(xs)
     println("Payments:")
     for (i in paymentPairs.indices) {
-        val amount = xs[i]
+        val amount = payments[i]
         if (amount > 0.01) {
             val (from, to) = paymentPairs[i]
             println("${people[from]} pays ${people[to]}: ${String.format("%.2f", amount)}")
@@ -183,4 +189,21 @@ fun printSettlement(xs: DoubleArray) {
 fun createAgent(): Agent {
     val xs = DoubleArray(argsize) { Random.nextDouble(min, max) }
     return Agent(xs = xs, score = optimizer(xs))
+}
+
+fun decodePaymentPriorities(xs: DoubleArray): DoubleArray {
+    val balances = initialBalances.copyOf()
+    val payments = DoubleArray(argsize)
+
+    for (paymentIndex in xs.indices.sortedByDescending { xs[it] }) {
+        val (from, to) = paymentPairs[paymentIndex]
+        val amount = minOf(-balances[from], balances[to])
+        if (amount > minimumTransactionAmount) {
+            payments[paymentIndex] = amount
+            balances[from] += amount
+            balances[to] -= amount
+        }
+    }
+
+    return payments
 }

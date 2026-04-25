@@ -31,6 +31,29 @@ This branch explores whether the existing Kotlin Differential Evolution implemen
 - Adding a debtor split penalty, intended to discourage one debtor paying multiple creditors, got worse in one run: 8 transactions.
 - The remaining failure mode is usually one extra split that would require a coordinated reshuffle across multiple edges.
 
+## Representation Shortcut
+
+- The most effective change was switching `xs` from payment amounts to random keys / edge priorities.
+- DE now evolves an ordering of debtor-to-creditor edges. A deterministic decoder walks edges in that order and fills in the maximum valid amount from remaining debtor/creditor balances.
+- This avoids asking DE to discover exact money amounts. DE only influences which edges are considered earlier.
+- With this representation, the 10-person scenario reached the exact oracle optimum of 6 transactions in repeated harness runs.
+- This is not the same as the earlier greedy bypass, because the decoder depends on the DE-evolved edge order. However, the decoder is doing most of the arithmetic and feasibility work.
+
+## Larger Constructed Scenario
+
+- Added a 20-person constructed case with ten independent debtor-creditor pairs.
+- The expected optimum is known by construction: 10 transactions.
+- The exact subset-DP oracle is not used for this case, because 20 people is too large for the current exponential oracle to be a comfortable harness dependency.
+- The random-key representation found the expected ten direct pair payments.
+- This is a good scale smoke test, but it is not strong evidence that DE is necessary; the structure is intentionally simple.
+
+## Honest Takeaway
+
+- For plain net-balance settlement, there are simpler deterministic algorithms than DE.
+- If the goal is a practical settlement engine, a greedy debtor-creditor matcher gives a valid settlement quickly, and exact or MILP-style methods are better fits when optimality is required.
+- DE is interesting here mainly as an experiment in representation and fitness shaping. Once we introduce a decoder that settles balances deterministically, DE mostly searches edge ordering rather than solving the settlement amounts.
+- The exercise still taught useful lessons: representation dominates fitness, hard `count(nonzero)` objectives are awkward for continuous optimizers, and exact small oracles are valuable for preventing self-deception.
+
 ## Suggested Next Steps
 
 - Keep the exact oracle in the harness and treat the 10-person scenario as the main red test.
