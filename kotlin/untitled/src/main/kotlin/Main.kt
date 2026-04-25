@@ -1,7 +1,6 @@
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.cos
-import kotlin.math.sqrt
 import kotlin.random.Random
 import kotlin.time.measureTime
 
@@ -33,6 +32,15 @@ const val popsize = 200
 const val generations = 20000
 const val print = 2000
 val optimizer = ::settleTrip
+
+const val minimumTransactionAmount = 0.01
+const val settledEnoughBalanceTolerance = 0.05
+const val unsettledBalancePenalty = 1_000_000.0
+const val realTransactionPenalty = 1_000.0
+const val softTransactionPenalty = 10.0
+const val softTransactionScale = 0.1
+const val unsettledSoftTransactionPenalty = 100.0
+const val moneyMovedPenalty = 0.001
 
 fun main() {
     // source "$HOME/.sdkman/bin/sdkman-init.sh"
@@ -124,13 +132,26 @@ fun rastrigin(xs: DoubleArray): Double {
 }
 
 fun settleTrip(xs: DoubleArray): Double {
-    val finalBalances = finalBalances(xs)
-    val balanceError = finalBalances.sumOf { abs(it) }
-    val transactionCount = xs.count { it > 0.01 }
-    val moneyMoved = xs.sum()
-    val splitPenalty = xs.sumOf { sqrt(it) }
+    val totalUnsettledBalance = finalBalances(xs).sumOf { abs(it) }
+    val numberOfRealTransactions = xs.count { it > minimumTransactionAmount }
+    val smoothApproximationOfTransactionCount = xs.sumOf { it / (it + softTransactionScale) }
+    val totalMoneyMoved = xs.sum()
 
-    return balanceError * 1_000_000.0 + transactionCount + moneyMoved * 0.001 + splitPenalty * 0.1
+    return if (totalUnsettledBalance > settledEnoughBalanceTolerance) {
+        val balanceIsStillTheOnlyThingThatMatters = totalUnsettledBalance * unsettledBalancePenalty
+        val gentleHintTowardFewerTransactions = smoothApproximationOfTransactionCount * unsettledSoftTransactionPenalty
+
+        balanceIsStillTheOnlyThingThatMatters + gentleHintTowardFewerTransactions
+    } else {
+        val exactTransactionCountDominatesAfterSettlement = numberOfRealTransactions * realTransactionPenalty
+        val smoothTieBreakerPrefersFewerSplitPayments = smoothApproximationOfTransactionCount * softTransactionPenalty
+        val tinyTieBreakerPrefersMovingLessMoney = totalMoneyMoved * moneyMovedPenalty
+
+        exactTransactionCountDominatesAfterSettlement +
+                smoothTieBreakerPrefersFewerSplitPayments +
+                tinyTieBreakerPrefersMovingLessMoney +
+                totalUnsettledBalance
+    }
 }
 
 fun finalBalances(xs: DoubleArray): DoubleArray {

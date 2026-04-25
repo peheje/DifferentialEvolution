@@ -18,6 +18,19 @@ This branch explores whether the existing Kotlin Differential Evolution implemen
 - A first smooth sparsity attempt, `sum(sqrt(amount))`, helped only slightly in one run: the 10-person case moved from about 19 transactions to about 17, still far from 6.
 - The core challenge is objective shape: balance error is smooth and heavily weighted, while transaction count is thresholded/discontinuous. Once DE reaches a dense balanced settlement, removing an edge requires coordinated changes across several dimensions.
 
+## Fitness Experiments So Far
+
+- Baseline blended score used balance error, hard transaction count, and total money moved. It solved the small cases but stayed dense on the 10-person case.
+- Increasing phase-2 hard transaction penalties alone made results worse. It did not help if the search had not already found a sparse basin.
+- A two-phase objective worked better: while unsettled, balance dominates but smooth sparsity still applies; once settled enough, exact transaction count dominates.
+- Replacing `sqrt(amount)` with `amount / (amount + k)` gave a more useful smooth approximation of active transaction count.
+- Current best settings use early smooth sparsity pressure with `softTransactionScale = 0.1` and `unsettledSoftTransactionPenalty = 100.0`.
+- Current best observed result on the 10-person scenario is 7 transactions. The exact oracle says 6, so this is close but still red.
+- Sharpening `softTransactionScale` to `0.01` still found 7 transactions, not 6.
+- Raising `unsettledSoftTransactionPenalty` to `300.0` still found 7 transactions, not 6.
+- Adding a debtor split penalty, intended to discourage one debtor paying multiple creditors, got worse in one run: 8 transactions.
+- The remaining failure mode is usually one extra split that would require a coordinated reshuffle across multiple edges.
+
 ## Suggested Next Steps
 
 - Keep the exact oracle in the harness and treat the 10-person scenario as the main red test.
