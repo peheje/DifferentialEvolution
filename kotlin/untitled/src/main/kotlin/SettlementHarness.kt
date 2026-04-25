@@ -10,6 +10,8 @@ private data class SettlementScenario(
     val expectedTransactionCount: Int? = null,
     val expectedPayments: List<ExpectedPayment>,
     val attempts: Int = 5,
+    val requireGreedyOptimal: Boolean = false,
+    val requireDeOptimal: Boolean = true,
 )
 
 fun main() {
@@ -45,18 +47,18 @@ fun main() {
             expectedPayments = emptyList(),
         ),
         SettlementScenario(
-            name = "twenty people, ten independent pairs",
+            name = "twenty people, mixed unknown optimum",
             problem = SettlementProblem(
                 people = arrayOf(
                     "A", "B", "C", "D", "E", "F", "G", "H", "I", "J",
                     "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T",
                 ),
                 initialBalances = doubleArrayOf(
-                    10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, 90.0, 100.0,
-                    -10.0, -20.0, -30.0, -40.0, -50.0, -60.0, -70.0, -80.0, -90.0, -100.0,
+                    115.0, 90.0, 75.0, 65.0, 55.0, 45.0, 35.0, 30.0, 25.0, 40.0,
+                    -100.0, -85.0, -80.0, -70.0, -60.0, -55.0, -40.0, -35.0, -25.0, -25.0,
                 ),
             ),
-            expectedTransactionCount = 10,
+            expectedTransactionCount = 13,
             expectedPayments = emptyList(),
         ),
     )
@@ -70,25 +72,46 @@ private fun runScenario(scenario: SettlementScenario) {
     val best = (1..scenario.attempts)
         .map { algorithm(verbose = false) }
         .minBy { it.score }
-    val payments = decodePaymentPriorities(best.xs)
-    val balances = finalBalances(best.xs)
-    val transactionCount = payments.count { it > 0.01 }
-    val expectedTransactionCount = scenario.expectedTransactionCount
-        ?: exactMinimumTransactionCount(scenario.problem.initialBalances)
-
-    require(balances.all { abs(it) < tolerance }) {
-        "${scenario.name}: expected all final balances within $tolerance of zero, got ${balances.contentToString()}"
+    val dePayments = decodePaymentPriorities(best.xs)
+    val greedyPayments = greedyLargestBalanceSettlement()
+    val deBalances = finalBalancesFromPayments(dePayments)
+    val greedyBalances = finalBalancesFromPayments(greedyPayments)
+    val deTransactionCount = dePayments.count { it > 0.01 }
+    val greedyTransactionCount = greedyPayments.count { it > 0.01 }
+    val expectedTransactionCount = if (scenario.requireDeOptimal || scenario.requireGreedyOptimal) {
+        scenario.expectedTransactionCount ?: exactMinimumTransactionCount(scenario.problem.initialBalances)
+    } else {
+        scenario.expectedTransactionCount
     }
 
-    require(transactionCount == expectedTransactionCount) {
-        "${scenario.name}: expected exactly $expectedTransactionCount transactions, got $transactionCount from ${best.xs.contentToString()}"
+    require(deBalances.all { abs(it) < tolerance }) {
+        "${scenario.name}: expected DE final balances within $tolerance of zero, got ${deBalances.contentToString()}"
     }
 
-    scenario.expectedPayments.forEach { assertPayment(payments, it) }
+    require(greedyBalances.all { abs(it) < tolerance }) {
+        "${scenario.name}: expected greedy final balances within $tolerance of zero, got ${greedyBalances.contentToString()}"
+    }
+
+    if (scenario.requireDeOptimal && expectedTransactionCount != null) {
+        require(deTransactionCount == expectedTransactionCount) {
+            "${scenario.name}: expected DE to use exactly $expectedTransactionCount transactions, got $deTransactionCount from ${best.xs.contentToString()}"
+        }
+    }
+
+    if (scenario.requireGreedyOptimal && expectedTransactionCount != null) {
+        require(greedyTransactionCount == expectedTransactionCount) {
+            "${scenario.name}: expected greedy to use exactly $expectedTransactionCount transactions, got $greedyTransactionCount"
+        }
+    }
+
+    scenario.expectedPayments.forEach { assertPayment(dePayments, it) }
+    scenario.expectedPayments.forEach { assertPayment(greedyPayments, it) }
 
     println("Settlement scenario passed: ${scenario.name}")
-    println("Score: ${best.score}")
+    println("DE score: ${best.score}")
+    println("DE transaction count: $deTransactionCount")
     printSettlement(best.xs)
+    println("Greedy transaction count: $greedyTransactionCount")
     println()
 }
 

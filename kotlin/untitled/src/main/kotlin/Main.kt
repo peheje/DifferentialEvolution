@@ -207,3 +207,29 @@ fun decodePaymentPriorities(xs: DoubleArray): DoubleArray {
 
     return payments
 }
+
+fun greedyLargestBalanceSettlement(): DoubleArray {
+    val remainingBalances = initialBalances.copyOf()
+    val payments = DoubleArray(argsize)
+
+    while (true) {
+        val debtor = people.indices
+            .filter { remainingBalances[it] < -minimumTransactionAmount }
+            .maxByOrNull { -remainingBalances[it] }
+        val creditor = people.indices
+            .filter { remainingBalances[it] > minimumTransactionAmount }
+            .maxByOrNull { remainingBalances[it] }
+
+        if (debtor == null || creditor == null) break
+
+        val amount = minOf(-remainingBalances[debtor], remainingBalances[creditor])
+        val pairIndex = paymentPairs.indexOf(debtor to creditor)
+        if (pairIndex < 0) error("No payment pair for ${people[debtor]} -> ${people[creditor]}")
+
+        payments[pairIndex] += amount
+        remainingBalances[debtor] += amount
+        remainingBalances[creditor] -= amount
+    }
+
+    return payments
+}

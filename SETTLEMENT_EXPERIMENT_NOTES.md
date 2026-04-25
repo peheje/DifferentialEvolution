@@ -39,13 +39,14 @@ This branch explores whether the existing Kotlin Differential Evolution implemen
 - With this representation, the 10-person scenario reached the exact oracle optimum of 6 transactions in repeated harness runs.
 - This is not the same as the earlier greedy bypass, because the decoder depends on the DE-evolved edge order. However, the decoder is doing most of the arithmetic and feasibility work.
 
-## Larger Constructed Scenario
+## Larger Scenarios and MILP Check
 
-- Added a 20-person constructed case with ten independent debtor-creditor pairs.
-- The expected optimum is known by construction: 10 transactions.
-- The exact subset-DP oracle is not used for this case, because 20 people is too large for the current exponential oracle to be a comfortable harness dependency.
-- The random-key representation found the expected ten direct pair payments.
-- This is a good scale smoke test, but it is not strong evidence that DE is necessary; the structure is intentionally simple.
+- A 20-person constructed case with ten independent debtor-creditor pairs was useful as a short-lived scale smoke test, but it was removed because it was too contrived and both DE and greedy should obviously solve it.
+- A mixed 20-person case is now included instead. It is not small enough for the subset-DP oracle to be a comfortable default, so a Python/SciPy MILP side script was added under `tools/settlement_milp.py`.
+- The MILP formulation minimizes binary edge-used variables while satisfying exact debtor and creditor flow constraints.
+- The MILP proves the mixed 20-person case has an optimum of 13 transactions.
+- The random-key DE representation found 13 transactions on that case, while the simple largest-balance greedy matcher found 14.
+- This is the strongest current evidence that DE can add value over the simplest greedy matcher, although MILP remains the better tool when exact optimality is needed.
 
 ## Honest Takeaway
 
@@ -53,6 +54,7 @@ This branch explores whether the existing Kotlin Differential Evolution implemen
 - If the goal is a practical settlement engine, a greedy debtor-creditor matcher gives a valid settlement quickly, and exact or MILP-style methods are better fits when optimality is required.
 - DE is interesting here mainly as an experiment in representation and fitness shaping. Once we introduce a decoder that settles balances deterministically, DE mostly searches edge ordering rather than solving the settlement amounts.
 - The exercise still taught useful lessons: representation dominates fitness, hard `count(nonzero)` objectives are awkward for continuous optimizers, and exact small oracles are valuable for preventing self-deception.
+- Current shutdown status: DE has shown usefulness relative to the simple greedy baseline on at least two nontrivial cases, but the best exact solver/reference approach is MILP, not DE.
 
 ## Suggested Next Steps
 
