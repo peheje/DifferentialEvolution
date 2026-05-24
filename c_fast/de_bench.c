@@ -15,10 +15,25 @@ enum {
     PRINT_EVERY = 0
 };
 
-static const double CROSSOVER_MIN = 0.1;
-static const double CROSSOVER_MAX = 1.0;
-static const double MUTATE_MIN = 0.2;
-static const double MUTATE_MAX = 0.95;
+/* ── jDE self-adaptive parameter control (Brest et al. 2006) ─────
+   Each individual carries its own F_i and CR_i. Before mutation:
+     • with probability TAU_F: re-sample F_i  ~ U(F_LO, F_HI)
+     • with probability TAU_CR: re-sample CR_i ~ U(0, 1)
+   If the trial wins, the new F_i/CR_i survive with the replacement.
+   If it loses, the old values stay — selection pressure tunes them.
+   Override any knob via -D, e.g.:  -DJDE_TAU_F=0.15            */
+#ifndef JDE_F_LO
+#define JDE_F_LO   0.1
+#endif
+#ifndef JDE_F_HI
+#define JDE_F_HI   0.9
+#endif
+#ifndef JDE_TAU_F
+#define JDE_TAU_F  0.1
+#endif
+#ifndef JDE_TAU_CR
+#define JDE_TAU_CR 0.1
+#endif
 
 typedef double (*objective_fn)(const double *xs, int n);
 
@@ -133,7 +148,9 @@ static BenchResult run_case(const BenchCase *bench, uint64_t seed) {
     double *pop = (double *)malloc(pop_len * sizeof(double));
     double *trials = (double *)malloc(pop_len * sizeof(double));
     double *scores = (double *)malloc((size_t)POPSIZE * sizeof(double));
-    if (!pop || !trials || !scores) {
+    double *Fi     = (double *)malloc((size_t)POPSIZE * sizeof(double));
+    double *CRi    = (double *)malloc((size_t)POPSIZE * sizeof(double));
+    if (!pop || !trials || !scores || !Fi || !CRi) {
         fprintf(stderr, "allocation failed\n");
         exit(1);
     }
@@ -156,24 +173,27 @@ static BenchResult run_case(const BenchCase *bench, uint64_t seed) {
             agent[j] = rand_range(&rng_states[0], bench->bounds_min, bench->bounds_max);
         }
         scores[i] = bench->objective(agent, params);
+        Fi[i]  = JDE_F_LO + rand01(&rng_states[0]) * (JDE_F_HI - JDE_F_LO);
+        CRi[i] = rand01(&rng_states[0]);
     }
 
-    double crossover = 0.0;
-    double mutate = 0.0;
-#pragma omp parallel default(none) shared(bench, params, agent_len, pop, trials, scores, rng_states, crossover, mutate, stdout)
+#pragma omp parallel default(none) shared(bench, params, agent_len, pop, trials, scores, Fi, CRi, rng_states, stdout)
     {
         int tid = omp_get_thread_num();
         uint64_t *state = &rng_states[tid];
 
         for (int g = 0; g < bench->generations; ++g) {
-#pragma omp single
-            {
-                crossover = rand_range(&rng_states[0], CROSSOVER_MIN, CROSSOVER_MAX);
-                mutate = rand_range(&rng_states[0], MUTATE_MIN, MUTATE_MAX);
-            }
-
 #pragma omp for schedule(static)
             for (int i = 0; i < POPSIZE; ++i) {
+                /* ── jDE: maybe re-sample F_i / CR_i ──────────── */
+                double Fi_try = Fi[i];
+                double CRi_try = CRi[i];
+                if (rand01(state) < JDE_TAU_F)
+                    Fi_try = JDE_F_LO + rand01(state) * (JDE_F_HI - JDE_F_LO);
+                if (rand01(state) < JDE_TAU_CR)
+                    CRi_try = rand01(state);
+
+                /* ── DE/rand/1/bin ───────────────────────────── */
                 int i0 = rand_int(state, POPSIZE);
                 int i1 = rand_int(state, POPSIZE);
                 int i2 = rand_int(state, POPSIZE);
@@ -185,8 +205,9 @@ static BenchResult run_case(const BenchCase *bench, uint64_t seed) {
                 double *trial = trials + (size_t)i * agent_len;
 
                 for (int j = 0; j < params; ++j) {
-                    if (rand01(state) < crossover) {
-                        trial[j] = clamp(x0[j] + (x1[j] - x2[j]) * mutate, bench->bounds_min, bench->bounds_max);
+                    if (rand01(state) < CRi_try) {
+                        trial[j] = clamp(x0[j] + (x1[j] - x2[j]) * Fi_try,
+                                         bench->bounds_min, bench->bounds_max);
                     } else {
                         trial[j] = xt[j];
                     }
@@ -196,7 +217,10 @@ static BenchResult run_case(const BenchCase *bench, uint64_t seed) {
                 if (trial_score < scores[i]) {
                     memcpy(xt, trial, agent_len * sizeof(double));
                     scores[i] = trial_score;
+                    Fi[i]  = Fi_try;    /* winning parameters survive */
+                    CRi[i] = CRi_try;
                 }
+                /* else: Fi[i], CRi[i] unchanged — old values live on */
             }
 
 #if PRINT_EVERY > 0
@@ -234,6 +258,8 @@ static BenchResult run_case(const BenchCase *bench, uint64_t seed) {
     free(pop);
     free(trials);
     free(scores);
+    free(Fi);
+    free(CRi);
     return result;
 }
 
