@@ -1,103 +1,40 @@
 #include <math.h>
-#include <omp.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <time.h>
+
+#include "de_solver.h"
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
-enum {
-    POPSIZE = 200,
-    PRINT_EVERY = 0
-};
-
-/* ── jDE self-adaptive parameter control (Brest et al. 2006) ─────
-   Each individual carries its own F_i and CR_i. Before mutation:
-     • with probability TAU_F: re-sample F_i  ~ U(F_LO, F_HI)
-     • with probability TAU_CR: re-sample CR_i ~ U(0, 1)
-   If the trial wins, the new F_i/CR_i survive with the replacement.
-   If it loses, the old values stay — selection pressure tunes them.
-   Override any knob via -D, e.g.:  -DJDE_TAU_F=0.15            */
-#ifndef JDE_F_LO
-#define JDE_F_LO   0.1
-#endif
-#ifndef JDE_F_HI
-#define JDE_F_HI   0.9
-#endif
-#ifndef JDE_TAU_F
-#define JDE_TAU_F  0.1
-#endif
-#ifndef JDE_TAU_CR
-#define JDE_TAU_CR 0.1
-#endif
-
+/* ── benchmark suite ───────────────────────────────────────────── */
 typedef double (*objective_fn)(const double *xs, int n);
 
 typedef struct {
-    const char *name;
-    objective_fn objective;
-    int params;
-    int generations;
-    int runs;
-    double bounds_min;
-    double bounds_max;
-    double success_threshold;
+    const char   *name;
+    objective_fn  objective;
+    int           params;
+    int           generations;
+    int           runs;
+    double        bounds_min;
+    double        bounds_max;
+    double        success_threshold;
 } BenchCase;
 
-typedef struct {
-    double best_score;
-    long elapsed_ms;
-} BenchResult;
-
-static inline uint64_t splitmix64(uint64_t *x) {
-    uint64_t z = (*x += 0x9e3779b97f4a7c15ULL);
-    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-    return z ^ (z >> 31);
-}
-
-static inline double rand01(uint64_t *state) {
-    return (splitmix64(state) >> 11) * (1.0 / 9007199254740992.0);
-}
-
-static inline int rand_int(uint64_t *state, int n) {
-    return (int)(splitmix64(state) % (uint64_t)n);
-}
-
-static inline double rand_range(uint64_t *state, double minv, double maxv) {
-    return rand01(state) * (maxv - minv) + minv;
-}
-
-static inline double clamp(double x, double minv, double maxv) {
-    return x < minv ? minv : (x > maxv ? maxv : x);
-}
-
-static long elapsed_ms(struct timespec start, struct timespec end) {
-    return (long)((end.tv_sec - start.tv_sec) * 1000L + (end.tv_nsec - start.tv_nsec) / 1000000L);
-}
-
-static int compare_long(const void *a, const void *b) {
-    long x = *(const long *)a;
-    long y = *(const long *)b;
-    return (x > y) - (x < y);
-}
-
+/* ── test functions ────────────────────────────────────────────── */
 static double sphere(const double *xs, int n) {
     double sum = 0.0;
-    for (int i = 0; i < n; ++i) {
-        sum += xs[i] * xs[i];
-    }
+    for (int i = 0; i < n; ++i) sum += xs[i] * xs[i];
     return sum;
 }
 
 static double rastrigin(const double *xs, int n) {
     double sum = 10.0 * (double)n;
     for (int i = 0; i < n; ++i) {
-        double x = xs[i];
+        const double x = xs[i];
         sum += x * x - 10.0 * cos(2.0 * M_PI * x);
     }
     return sum;
@@ -106,209 +43,95 @@ static double rastrigin(const double *xs, int n) {
 static double rosenbrock(const double *xs, int n) {
     double sum = 0.0;
     for (int i = 0; i < n - 1; ++i) {
-        double a = xs[i + 1] - xs[i] * xs[i];
-        double b = 1.0 - xs[i];
+        const double a = xs[i + 1] - xs[i] * xs[i];
+        const double b = 1.0 - xs[i];
         sum += 100.0 * a * a + b * b;
     }
     return sum;
 }
 
 static double ackley(const double *xs, int n) {
-    double sum_sq = 0.0;
-    double sum_cos = 0.0;
+    double sum_sq = 0.0, sum_cos = 0.0;
     for (int i = 0; i < n; ++i) {
-        double x = xs[i];
-        sum_sq += x * x;
+        const double x = xs[i];
+        sum_sq  += x * x;
         sum_cos += cos(2.0 * M_PI * x);
     }
-    return -20.0 * exp(-0.2 * sqrt(sum_sq / (double)n)) -
-           exp(sum_cos / (double)n) +
-           20.0 + exp(1.0);
+    return -20.0 * exp(-0.2 * sqrt(sum_sq / (double)n))
+           - exp(sum_cos / (double)n) + 20.0 + exp(1.0);
 }
 
 static double griewank(const double *xs, int n) {
-    double sum = 0.0;
-    double product = 1.0;
+    double sum = 0.0, product = 1.0;
     for (int i = 0; i < n; ++i) {
-        double x = xs[i];
-        sum += x * x / 4000.0;
+        const double x = xs[i];
+        sum     += x * x / 4000.0;
         product *= cos(x / sqrt((double)(i + 1)));
     }
     return sum - product + 1.0;
 }
 
-static BenchResult run_case(const BenchCase *bench, uint64_t seed) {
-    struct timespec t0, t1;
-    clock_gettime(CLOCK_MONOTONIC, &t0);
-
-    int params = bench->params;
-    size_t agent_len = (size_t)params;
-    size_t pop_len = (size_t)POPSIZE * agent_len;
-
-    double *pop = (double *)malloc(pop_len * sizeof(double));
-    double *trials = (double *)malloc(pop_len * sizeof(double));
-    double *scores = (double *)malloc((size_t)POPSIZE * sizeof(double));
-    double *Fi     = (double *)malloc((size_t)POPSIZE * sizeof(double));
-    double *CRi    = (double *)malloc((size_t)POPSIZE * sizeof(double));
-    if (!pop || !trials || !scores || !Fi || !CRi) {
-        fprintf(stderr, "allocation failed\n");
-        exit(1);
-    }
-
-    int threads = omp_get_max_threads();
-    uint64_t *rng_states = (uint64_t *)malloc((size_t)threads * sizeof(uint64_t));
-    if (!rng_states) {
-        fprintf(stderr, "rng allocation failed\n");
-        exit(1);
-    }
-
-    for (int t = 0; t < threads; ++t) {
-        uint64_t s = seed + (uint64_t)t * 0x9e3779b97f4a7c15ULL;
-        rng_states[t] = splitmix64(&s);
-    }
-
-    for (int i = 0; i < POPSIZE; ++i) {
-        double *agent = pop + (size_t)i * agent_len;
-        for (int j = 0; j < params; ++j) {
-            agent[j] = rand_range(&rng_states[0], bench->bounds_min, bench->bounds_max);
-        }
-        scores[i] = bench->objective(agent, params);
-        Fi[i]  = JDE_F_LO + rand01(&rng_states[0]) * (JDE_F_HI - JDE_F_LO);
-        CRi[i] = rand01(&rng_states[0]);
-    }
-
-#pragma omp parallel default(none) shared(bench, params, agent_len, pop, trials, scores, Fi, CRi, rng_states, stdout)
-    {
-        int tid = omp_get_thread_num();
-        uint64_t *state = &rng_states[tid];
-
-        for (int g = 0; g < bench->generations; ++g) {
-#pragma omp for schedule(static)
-            for (int i = 0; i < POPSIZE; ++i) {
-                /* ── jDE: maybe re-sample F_i / CR_i ──────────── */
-                double Fi_try = Fi[i];
-                double CRi_try = CRi[i];
-                if (rand01(state) < JDE_TAU_F)
-                    Fi_try = JDE_F_LO + rand01(state) * (JDE_F_HI - JDE_F_LO);
-                if (rand01(state) < JDE_TAU_CR)
-                    CRi_try = rand01(state);
-
-                /* ── DE/rand/1/bin ───────────────────────────── */
-                int i0 = rand_int(state, POPSIZE);
-                int i1 = rand_int(state, POPSIZE);
-                int i2 = rand_int(state, POPSIZE);
-
-                const double *x0 = pop + (size_t)i0 * agent_len;
-                const double *x1 = pop + (size_t)i1 * agent_len;
-                const double *x2 = pop + (size_t)i2 * agent_len;
-                double *xt = pop + (size_t)i * agent_len;
-                double *trial = trials + (size_t)i * agent_len;
-
-                for (int j = 0; j < params; ++j) {
-                    if (rand01(state) < CRi_try) {
-                        trial[j] = clamp(x0[j] + (x1[j] - x2[j]) * Fi_try,
-                                         bench->bounds_min, bench->bounds_max);
-                    } else {
-                        trial[j] = xt[j];
-                    }
-                }
-
-                double trial_score = bench->objective(trial, params);
-                if (trial_score < scores[i]) {
-                    memcpy(xt, trial, agent_len * sizeof(double));
-                    scores[i] = trial_score;
-                    Fi[i]  = Fi_try;    /* winning parameters survive */
-                    CRi[i] = CRi_try;
-                }
-                /* else: Fi[i], CRi[i] unchanged — old values live on */
-            }
-
-#if PRINT_EVERY > 0
-#pragma omp single
-            {
-                if (g % PRINT_EVERY == 0 || g == bench->generations - 1) {
-                    double minv = scores[0];
-                    for (int i = 1; i < POPSIZE; ++i) {
-                        if (scores[i] < minv) minv = scores[i];
-                    }
-                    printf("%s generation %d minimum %.12g\n", bench->name, g, minv);
-                }
-            }
-#endif
-        }
-    }
-
-    double best_score = scores[0];
-    for (int i = 1; i < POPSIZE; ++i) {
-        if (scores[i] < best_score) best_score = scores[i];
-    }
-
-    if (!isfinite(best_score)) {
-        fprintf(stderr, "%s produced non-finite best score\n", bench->name);
-        exit(1);
-    }
-
-    clock_gettime(CLOCK_MONOTONIC, &t1);
-    BenchResult result = {
-        .best_score = best_score,
-        .elapsed_ms = elapsed_ms(t0, t1),
-    };
-
-    free(rng_states);
-    free(pop);
-    free(trials);
-    free(scores);
-    free(Fi);
-    free(CRi);
-    return result;
+/* ── timing helpers ────────────────────────────────────────────── */
+static long elapsed_ms(struct timespec start, struct timespec end) {
+    return (long)((end.tv_sec - start.tv_sec) * 1000L
+                + (end.tv_nsec - start.tv_nsec) / 1000000L);
 }
 
-int main(void) {
-    BenchCase cases[] = {
-        {"sphere", sphere, 1000, 20000, 3, -10.0, 10.0, 1e-6},
-        {"rastrigin", rastrigin, 200, 8000, 3, -5.12, 5.12, 250.0},
-        {"rosenbrock", rosenbrock, 200, 8000, 3, -5.0, 10.0, 250.0},
-        {"ackley", ackley, 200, 8000, 3, -32.768, 32.768, 1e-3},
-        {"griewank", griewank, 200, 8000, 3, -600.0, 600.0, 1e-3},
-    };
+static int compare_long(const void *a, const void *b) {
+    const long x = *(const long *)a;
+    const long y = *(const long *)b;
+    return (x > y) - (x < y);
+}
 
-    int case_count = (int)(sizeof(cases) / sizeof(cases[0]));
-    uint64_t base_seed = 0xD1FF3A9E2B1C4D77ULL;
+/* ── main ──────────────────────────────────────────────────────── */
+int main(void) {
+    enum { POPSIZE = 200 };
+
+    const BenchCase cases[] = {
+        {"sphere",     sphere,     1000, 20000, 3, -10.0,    10.0,    1e-6},
+        {"rastrigin",  rastrigin,  200,  8000,  3, -5.12,    5.12,    250.0},
+        {"rosenbrock", rosenbrock, 200,  8000,  3, -5.0,     10.0,    250.0},
+        {"ackley",     ackley,     200,  8000,  3, -32.768,  32.768,  1e-3},
+        {"griewank",   griewank,   200,  8000,  3, -600.0,   600.0,   1e-3},
+    };
+    const int case_count = (int)(sizeof(cases) / sizeof(cases[0]));
+    const uint64_t base_seed = 0xD1FF3A9E2B1C4D77ULL;
 
     printf("%-12s %6s %10s %5s %14s %10s %10s %10s %8s\n",
-           "objective", "dims", "generations", "runs", "best_score", "best_ms", "median_ms", "worst_ms", "success");
+           "objective", "dims", "generations", "runs",
+           "best_score", "best_ms", "median_ms", "worst_ms", "success");
 
     for (int c = 0; c < case_count; ++c) {
-        const BenchCase *bench = &cases[c];
+        const BenchCase *b = &cases[c];
         double best_score = INFINITY;
-        long times[16];
-        int successes = 0;
+        long   times[16];
+        int    successes = 0;
 
-        if (bench->runs > (int)(sizeof(times) / sizeof(times[0]))) {
-            fprintf(stderr, "too many runs for %s\n", bench->name);
-            return 1;
+        for (int r = 0; r < b->runs; ++r) {
+            const uint64_t seed = base_seed
+                + (uint64_t)c * 0x9e3779b97f4a7c15ULL
+                + (uint64_t)r * 0xbf58476d1ce4e5b9ULL;
+
+            struct timespec t0, t1;
+            clock_gettime(CLOCK_MONOTONIC, &t0);
+
+            const double score = de_solve(b->params, POPSIZE, b->generations,
+                                          b->bounds_min, b->bounds_max,
+                                          b->objective, seed);
+
+            clock_gettime(CLOCK_MONOTONIC, &t1);
+
+            if (score < best_score) best_score = score;
+            if (score <= b->success_threshold) successes++;
+            times[r] = elapsed_ms(t0, t1);
         }
 
-        for (int r = 0; r < bench->runs; ++r) {
-            uint64_t seed = base_seed + (uint64_t)c * 0x9e3779b97f4a7c15ULL + (uint64_t)r * 0xbf58476d1ce4e5b9ULL;
-            BenchResult result = run_case(bench, seed);
-            if (result.best_score < best_score) best_score = result.best_score;
-            if (result.best_score <= bench->success_threshold) successes++;
-            times[r] = result.elapsed_ms;
-        }
-
-        qsort(times, (size_t)bench->runs, sizeof(times[0]), compare_long);
+        qsort(times, (size_t)b->runs, sizeof(times[0]), compare_long);
         printf("%-12s %6d %10d %5d %14.6g %10ld %10ld %10ld %3d/%-4d\n",
-               bench->name,
-               bench->params,
-               bench->generations,
-               bench->runs,
+               b->name, b->params, b->generations, b->runs,
                best_score,
-               times[0],
-               times[bench->runs / 2],
-               times[bench->runs - 1],
-               successes,
-               bench->runs);
+               times[0], times[b->runs / 2], times[b->runs - 1],
+               successes, b->runs);
     }
 
     return 0;
