@@ -22,7 +22,8 @@ static double recurrence_next(double xt, double xt1) {
 
 /* N-dimensional recurrence:
    target = sin(2.5*a_1) + sum_{i=2}^{N} 0.6 * 0.6^{i-2} * a_i
-   Total linear weight < 1.5, output bounded in [-2.5, 2.5].    */
+   The linear coefficients sum to < 1.5, so full-box random inputs can
+   produce a wider target range than the 2D invariant sequence.    */
 static double recurrence_nd(int n_dims, const double *xs) {
     double y = sin(2.5 * xs[0]);
     double coeff = 0.6;
@@ -673,6 +674,18 @@ static const NnTask TASKS[] = {
         SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
     },
     {
+        "pair1-huber0.5-wide-eqbudget",
+        2, 1, 24, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
         "pair1-huber0.5-wide-best1",
         2, 1, 24, 1,
         SEQ_TRAIN_SAMPLES,
@@ -689,6 +702,18 @@ static const NnTask TASKS[] = {
         2, 2, 12, 1,
         SEQ_TRAIN_SAMPLES,
         1536, 768, 25000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-huber0.5-deep-eqbudget",
+        2, 2, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
         2,
         1.0,
         0.0,
@@ -861,6 +886,14 @@ static _Thread_local double *thread_ln_gamma;
 static _Thread_local double *thread_ln_beta;
 static _Thread_local int thread_ln_hidden;
 
+static void clear_thread_layernorm(void) {
+    free(thread_ln_gamma);
+    free(thread_ln_beta);
+    thread_ln_gamma = NULL;
+    thread_ln_beta = NULL;
+    thread_ln_hidden = 0;
+}
+
 static void configure_task_ann(genann *ann, const NnTask *task) {
     ann->activation_output = genann_act_linear;
     if (strstr(task->name, "tanh"))
@@ -962,11 +995,7 @@ static genann *task_ann(const NnTask *task) {
     if (thread_task != task) {
         genann_free(thread_ann);
         thread_ann = NULL;
-        free(thread_ln_gamma);
-        free(thread_ln_beta);
-        thread_ln_gamma = NULL;
-        thread_ln_beta = NULL;
-        thread_ln_hidden = 0;
+        clear_thread_layernorm();
         thread_task = task;
     }
     if (!thread_ann) {
@@ -1379,6 +1408,28 @@ static void evaluate_task_by_output(genann *ann, const NnTask *task,
     }
 }
 
+static double target_variance(const NnTask *task, const double *target,
+                              int samples) {
+    const int total = samples * task->outputs;
+    double mean = 0.0;
+    for (int i = 0; i < samples; ++i) {
+        const double *ts = target + (size_t)i * task->target_stride;
+        for (int o = 0; o < task->outputs; ++o)
+            mean += ts[o];
+    }
+    mean /= (double)total;
+
+    double var = 0.0;
+    for (int i = 0; i < samples; ++i) {
+        const double *ts = target + (size_t)i * task->target_stride;
+        for (int o = 0; o < task->outputs; ++o) {
+            const double d = ts[o] - mean;
+            var += d * d;
+        }
+    }
+    return var / (double)total;
+}
+
 /* ── regional error diagnostics ─────────────────────────────────── */
 enum { REGIONAL_GRID = 200 };
 
@@ -1587,6 +1638,19 @@ static void print_by_output_metrics(const char *label, const NnTask *task,
         printf("%s[%d] MSE %.8g  MAE %.8g\n", label, o, mse[o], mae[o]);
 }
 
+static long long de_trial_evaluation_budget(int initial_popsize,
+                                            int min_popsize,
+                                            int generations) {
+    long long evals = initial_popsize;
+    int active = initial_popsize;
+    for (int g = 0; g < generations; ++g) {
+        evals += active;
+        active = de_lpsr_population_size(initial_popsize, min_popsize,
+                                         generations, g);
+    }
+    return evals;
+}
+
 /* ── run one task ───────────────────────────────────────────────── */
 static int run_task(const NnTask *task, int runs, int generations_override) {
     genann *template = genann_init(task->inputs, task->hidden_layers,
@@ -1619,10 +1683,13 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
         ? generations_override
         : task->generations;
 
-    printf("%s: inputs=%d hidden=%d outputs=%d weights=%d(+%dLN) pop=%d->%d gens=%d runs=%d\n",
+    const long long eval_budget = de_trial_evaluation_budget(
+        task->popsize, task->min_popsize, generations);
+
+    printf("%s: inputs=%d hidden=%d outputs=%d weights=%d(+%dLN) pop=%d->%d gens=%d evals/run=%lld runs=%d\n",
            task->name, task->inputs, task->hidden, task->outputs,
            n_reg, total_params - n_reg,
-           task->popsize, task->min_popsize, generations, runs);
+           task->popsize, task->min_popsize, generations, eval_budget, runs);
     printf("%-5s %14s %10s\n", "run", "loss", "ms");
 
     for (int r = 0; r < runs; ++r) {
@@ -1689,13 +1756,14 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
             free(best_weights); free(run_weights);
             return 1;
         }
+        clear_thread_layernorm();
         memcpy(ln_g, best_weights + n_reg, (size_t)n_ln * sizeof(double));
         memcpy(ln_b, best_weights + n_reg + n_ln, (size_t)n_ln * sizeof(double));
         thread_ln_gamma = ln_g;
         thread_ln_beta = ln_b;
         thread_ln_hidden = task->hidden_layers;
     } else {
-        thread_ln_hidden = 0;
+        clear_thread_layernorm();
     }
 
     /* header */
@@ -1730,10 +1798,7 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
     double test_mse_by_output[8], test_mae_by_output[8];
     if (task->outputs > 8) {
         fprintf(stderr, "too many outputs for metric buffer\n");
-        if (task_uses_layernorm(task)) {
-            free(thread_ln_gamma);
-            free(thread_ln_beta);
-        }
+        clear_thread_layernorm();
         genann_free(ann);
         free(best_weights);
         free(run_weights);
@@ -1745,6 +1810,17 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
                   &test_mse, &test_mae);
     printf("train MSE %.8g  MAE %.8g\n", train_mse, train_mae);
     printf("test  MSE %.8g  MAE %.8g\n", test_mse, test_mae);
+    {
+        const double train_var = target_variance(task, task->target, task->samples);
+        const double test_var = target_variance(task, task->test_target,
+                                                task->test_samples);
+        if (train_var > 0.0 && test_var > 0.0) {
+            printf("train nMSE %.8g  target_var %.8g\n",
+                   train_mse / train_var, train_var);
+            printf("test  nMSE %.8g  target_var %.8g\n",
+                   test_mse / test_var, test_var);
+        }
+    }
     evaluate_abs_error_stats(ann, task, task->input, task->target, task->samples,
                              &train_p95_abs, &train_max_abs);
     evaluate_abs_error_stats(ann, task, task->test_input, task->test_target,
@@ -1795,10 +1871,7 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
             evaluate_regional_errors(ann);
     }
 
-    if (task_uses_layernorm(task)) {
-        free(thread_ln_gamma);
-        free(thread_ln_beta);
-    }
+    clear_thread_layernorm();
     genann_free(ann);
     free(best_weights);
     free(run_weights);

@@ -277,6 +277,7 @@ static double de_state_evolve(
                 const double *xt_prev = prev_pop + (size_t)i * agent_len;
                 double *xt       = pop + (size_t)i  * agent_len;
                 int is_curtobest = 0;
+                const int jrand = de_rand_int(state, params);
 
                 if (mutation_strategy == 1) {
                     /* ── DE/best/1/bin ────────────────────── */
@@ -311,7 +312,7 @@ static double de_state_evolve(
                         for (int j = 0; j < params; ++j) {
                             const double base = lam * x0[j]
                                               + (1.0 - lam) * xb[j];
-                            if (de_rand01(state) < CRi_try)
+                            if (j == jrand || de_rand01(state) < CRi_try)
                                 trial[j] = de_clamp(
                                     base + (x1[j] - x2[j]) * Fi_try,
                                     bounds_min, bounds_max);
@@ -338,7 +339,7 @@ static double de_state_evolve(
                 }
 
                 for (int j = 0; j < params; ++j) {
-                    if (de_rand01(state) < CRi_try) {
+                    if (j == jrand || de_rand01(state) < CRi_try) {
                         if (is_curtobest)
                             trial[j] = de_clamp(
                                 xt_prev[j]

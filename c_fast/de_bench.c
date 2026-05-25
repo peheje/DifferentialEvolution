@@ -91,15 +91,23 @@ static int compare_long(const void *a, const void *b) {
 }
 
 /* ── main ──────────────────────────────────────────────────────── */
-int main(void) {
+int main(int argc, char **argv) {
     enum { POPSIZE = 200 };
+    setbuf(stdout, NULL);
+
+    const int quick = argc > 1 && strcmp(argv[1], "quick") == 0;
 
     const BenchCase cases[] = {
-        {"sphere",     sphere,     1000, 20000, 3, -10.0,    10.0,    1e-6},
-        {"rastrigin",  rastrigin,  200,  8000,  3, -5.12,    5.12,    250.0},
-        {"rosenbrock", rosenbrock, 200,  8000,  3, -5.0,     10.0,    250.0},
-        {"ackley",     ackley,     200,  8000,  3, -32.768,  32.768,  1e-3},
-        {"griewank",   griewank,   200,  8000,  3, -600.0,   600.0,   1e-3},
+        {"sphere",     sphere,     quick ? 200 : 1000,
+         quick ? 2000 : 20000, quick ? 1 : 3, -10.0,   10.0,   1e-6},
+        {"rastrigin",  rastrigin,  quick ? 50  : 200,
+         quick ? 1000 : 8000,  quick ? 1 : 3, -5.12,   5.12,   250.0},
+        {"rosenbrock", rosenbrock, quick ? 50  : 200,
+         quick ? 1000 : 8000,  quick ? 1 : 3, -5.0,    10.0,   250.0},
+        {"ackley",     ackley,     quick ? 50  : 200,
+         quick ? 1000 : 8000,  quick ? 1 : 3, -32.768, 32.768, 1e-3},
+        {"griewank",   griewank,   quick ? 50  : 200,
+         quick ? 1000 : 8000,  quick ? 1 : 3, -600.0,  600.0,  1e-3},
     };
     const int case_count = (int)(sizeof(cases) / sizeof(cases[0]));
     const SolverCase solvers[] = {
