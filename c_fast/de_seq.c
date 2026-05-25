@@ -20,6 +20,19 @@ static double recurrence_next(double xt, double xt1) {
     return sin(2.5 * xt) + 0.6 * xt1;
 }
 
+/* N-dimensional recurrence:
+   target = sin(2.5*a_1) + sum_{i=2}^{N} 0.6 * 0.6^{i-2} * a_i
+   Total linear weight < 1.5, output bounded in [-2.5, 2.5].    */
+static double recurrence_nd(int n_dims, const double *xs) {
+    double y = sin(2.5 * xs[0]);
+    double coeff = 0.6;
+    for (int i = 1; i < n_dims; ++i) {
+        y += coeff * xs[i];
+        coeff *= 0.6;
+    }
+    return y;
+}
+
 /* ── local activation variants ─────────────────────────────────── */
 static double act_tanh(const genann *ann, double a) {
     (void)ann;
@@ -88,6 +101,14 @@ static double PAIR1_TEST_INPUT [SEQ_TEST_SAMPLES * 2];
 static double PAIR1_TEST_TARGET[SEQ_TEST_SAMPLES];
 static double PAIR_SCALED_TRAIN_INPUT[SEQ_TRAIN_SAMPLES * 2];
 static double PAIR_SCALED_TEST_INPUT[SEQ_TEST_SAMPLES * 2];
+static double PAIR5_TRAIN_INPUT[SEQ_TRAIN_SAMPLES * 5];
+static double PAIR5_TRAIN_TARGET[SEQ_TRAIN_SAMPLES];
+static double PAIR5_TEST_INPUT[SEQ_TEST_SAMPLES * 5];
+static double PAIR5_TEST_TARGET[SEQ_TEST_SAMPLES];
+static double PAIR10_TRAIN_INPUT[SEQ_TRAIN_SAMPLES * 10];
+static double PAIR10_TRAIN_TARGET[SEQ_TRAIN_SAMPLES];
+static double PAIR10_TEST_INPUT[SEQ_TEST_SAMPLES * 10];
+static double PAIR10_TEST_TARGET[SEQ_TEST_SAMPLES];
 static double PAIR2_TEST_INPUT [SEQ_TEST_SAMPLES * 2];
 static double PAIR2_TEST_TARGET[SEQ_TEST_SAMPLES * 2];
 static double PAIRMID1_TEST_INPUT [SEQ_TEST_SAMPLES * 2];
@@ -676,6 +697,54 @@ static const NnTask TASKS[] = {
         PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
         SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
     },
+    {
+        "pair5-huber0.5",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5_TRAIN_INPUT, PAIR5_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5_TEST_INPUT, PAIR5_TEST_TARGET,
+    },
+    {
+        "pair5-huber0.5-best1",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5_TRAIN_INPUT, PAIR5_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5_TEST_INPUT, PAIR5_TEST_TARGET,
+    },
+    {
+        "pair10-huber0.5",
+        10, 1, 24, 1,
+        SEQ_TRAIN_SAMPLES,
+        1536, 768, 20000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR10_TRAIN_INPUT, PAIR10_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR10_TEST_INPUT, PAIR10_TEST_TARGET,
+    },
+    {
+        "pair10-huber0.5-best1",
+        10, 1, 24, 1,
+        SEQ_TRAIN_SAMPLES,
+        1536, 768, 20000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR10_TRAIN_INPUT, PAIR10_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR10_TEST_INPUT, PAIR10_TEST_TARGET,
+    },
 };
 
 /* ── thread-local genann cache ──────────────────────────────────── */
@@ -1040,6 +1109,17 @@ static void fill_mixed_pair_data(double *input1, double *target1,
                           seed ^ 0xC0FFEE123456789ULL);
 }
 
+static void fill_nd_pair_data(double *input, double *target,
+                               int samples, int n_dims,
+                               double lo, double hi, uint64_t seed) {
+    for (int i = 0; i < samples; ++i) {
+        double *xs = input + (size_t)i * n_dims;
+        for (int d = 0; d < n_dims; ++d)
+            xs[d] = local_rand_range(&seed, lo, hi);
+        target[i] = recurrence_nd(n_dims, xs);
+    }
+}
+
 static void init_generated_data(void) {
     /* train sequence — seed A */
     enum { TRAIN_LEN = SEQ_TRAIN_SAMPLES + 4 };
@@ -1085,6 +1165,18 @@ static void init_generated_data(void) {
         PAIR_SCALED_TEST_INPUT[i * 2]     = PAIR1_TEST_INPUT[i * 2] / 2.5;
         PAIR_SCALED_TEST_INPUT[i * 2 + 1] = PAIR1_TEST_INPUT[i * 2 + 1] / 2.5;
     }
+    fill_nd_pair_data(PAIR5_TRAIN_INPUT, PAIR5_TRAIN_TARGET,
+                      SEQ_TRAIN_SAMPLES, 5, -2.5, 2.5,
+                      0x50A1E5EEDC0FFEEULL);
+    fill_nd_pair_data(PAIR5_TEST_INPUT, PAIR5_TEST_TARGET,
+                      SEQ_TEST_SAMPLES, 5, -2.5, 2.5,
+                      0x50A1E7E57C0FFEEULL);
+    fill_nd_pair_data(PAIR10_TRAIN_INPUT, PAIR10_TRAIN_TARGET,
+                      SEQ_TRAIN_SAMPLES, 10, -2.5, 2.5,
+                      0x10A1E5EEDC0FFEEULL);
+    fill_nd_pair_data(PAIR10_TEST_INPUT, PAIR10_TEST_TARGET,
+                      SEQ_TEST_SAMPLES, 10, -2.5, 2.5,
+                      0x10A1E7E57C0FFEEULL);
     fill_random_pair_data(PAIRMID1_TRAIN_INPUT, PAIRMID1_TRAIN_TARGET,
                           PAIRMID2_TRAIN_INPUT, PAIRMID2_TRAIN_TARGET,
                           SEQ_TRAIN_SAMPLES, -1.5, 1.5,
@@ -1525,7 +1617,7 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
     print_by_output_metrics("train output", task, train_mse_by_output, train_mae_by_output);
     print_by_output_metrics("test  output", task, test_mse_by_output, test_mae_by_output);
 
-    if (task->outputs == 1) {
+    if (task->outputs == 1 && task->inputs <= 2) {
         double train_r_mse0, train_r_mae0, train_r_mse1, train_r_mae1;
         double test_r_mse0, test_r_mae0, test_r_mse1, test_r_mae1;
         const double *roll_train_input = task->target_stride >= 2
