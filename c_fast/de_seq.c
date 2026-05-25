@@ -33,6 +33,13 @@ static double recurrence_nd(int n_dims, const double *xs) {
     return y;
 }
 
+/* Nonlinear 5D variant: sin on a1 and a2, linear on rest.
+   40% nonlinear (2/5 terms). Used to test DE strategy preference. */
+static double recurrence_5d_nonlin(const double *xs) {
+    return sin(2.5 * xs[0]) + sin(1.5 * xs[1])
+         + 0.6 * xs[2] + 0.36 * xs[3] + 0.22 * xs[4];
+}
+
 /* ── local activation variants ─────────────────────────────────── */
 static double act_tanh(const genann *ann, double a) {
     (void)ann;
@@ -109,6 +116,10 @@ static double PAIR10_TRAIN_INPUT[SEQ_TRAIN_SAMPLES * 10];
 static double PAIR10_TRAIN_TARGET[SEQ_TRAIN_SAMPLES];
 static double PAIR10_TEST_INPUT[SEQ_TEST_SAMPLES * 10];
 static double PAIR10_TEST_TARGET[SEQ_TEST_SAMPLES];
+static double PAIR5NL_TRAIN_INPUT[SEQ_TRAIN_SAMPLES * 5];
+static double PAIR5NL_TRAIN_TARGET[SEQ_TRAIN_SAMPLES];
+static double PAIR5NL_TEST_INPUT[SEQ_TEST_SAMPLES * 5];
+static double PAIR5NL_TEST_TARGET[SEQ_TEST_SAMPLES];
 static double PAIR2_TEST_INPUT [SEQ_TEST_SAMPLES * 2];
 static double PAIR2_TEST_TARGET[SEQ_TEST_SAMPLES * 2];
 static double PAIRMID1_TEST_INPUT [SEQ_TEST_SAMPLES * 2];
@@ -745,6 +756,102 @@ static const NnTask TASKS[] = {
         PAIR10_TRAIN_INPUT, PAIR10_TRAIN_TARGET,
         SEQ_TEST_SAMPLES, PAIR10_TEST_INPUT, PAIR10_TEST_TARGET,
     },
+    {
+        "pair5-nonlin-huber0.5",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5NL_TRAIN_INPUT, PAIR5NL_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5NL_TEST_INPUT, PAIR5NL_TEST_TARGET,
+    },
+    {
+        "pair5-nonlin-huber0.5-best1",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5NL_TRAIN_INPUT, PAIR5NL_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5NL_TEST_INPUT, PAIR5NL_TEST_TARGET,
+    },
+    {
+        "pair1-huber0.5-curtobest1",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair5-huber0.5-curtobest1",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5_TRAIN_INPUT, PAIR5_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5_TEST_INPUT, PAIR5_TEST_TARGET,
+    },
+    {
+        "pair5-nonlin-huber0.5-curtobest1",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5NL_TRAIN_INPUT, PAIR5NL_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5NL_TEST_INPUT, PAIR5NL_TEST_TARGET,
+    },
+    {
+        "pair1-huber0.5-anneal",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair5-huber0.5-anneal",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5_TRAIN_INPUT, PAIR5_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5_TEST_INPUT, PAIR5_TEST_TARGET,
+    },
+    {
+        "pair5-nonlin-huber0.5-anneal",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5NL_TRAIN_INPUT, PAIR5NL_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5NL_TEST_INPUT, PAIR5NL_TEST_TARGET,
+    },
 };
 
 /* ── thread-local genann cache ──────────────────────────────────── */
@@ -909,8 +1016,11 @@ static double task_huber_delta(const NnTask *task) {
     return atof(p + 5);
 }
 
-static int task_uses_best1(const NnTask *task) {
-    return strstr(task->name, "-best1") != NULL;
+static int task_mutation_strategy(const NnTask *task) {
+    if (strstr(task->name, "-anneal"))     return 3;
+    if (strstr(task->name, "-curtobest1")) return 2;
+    if (strstr(task->name, "-best1"))      return 1;
+    return 0;
 }
 
 static int is_full_box_pair_task(const char *name) {
@@ -1177,6 +1287,25 @@ static void init_generated_data(void) {
     fill_nd_pair_data(PAIR10_TEST_INPUT, PAIR10_TEST_TARGET,
                       SEQ_TEST_SAMPLES, 10, -2.5, 2.5,
                       0x10A1E7E57C0FFEEULL);
+    /* nonlinear 5D: sin on a1 and a2 */
+    {
+        uint64_t s = 0x5A1E5EEDC0FFEEULL;
+        for (int i = 0; i < SEQ_TRAIN_SAMPLES; ++i) {
+            double *xs = PAIR5NL_TRAIN_INPUT + (size_t)i * 5;
+            for (int d = 0; d < 5; ++d)
+                xs[d] = local_rand_range(&s, -2.5, 2.5);
+            PAIR5NL_TRAIN_TARGET[i] = recurrence_5d_nonlin(xs);
+        }
+    }
+    {
+        uint64_t s = 0x5A1E7E57C0FFEEULL;
+        for (int i = 0; i < SEQ_TEST_SAMPLES; ++i) {
+            double *xs = PAIR5NL_TEST_INPUT + (size_t)i * 5;
+            for (int d = 0; d < 5; ++d)
+                xs[d] = local_rand_range(&s, -2.5, 2.5);
+            PAIR5NL_TEST_TARGET[i] = recurrence_5d_nonlin(xs);
+        }
+    }
     fill_random_pair_data(PAIRMID1_TRAIN_INPUT, PAIRMID1_TRAIN_TARGET,
                           PAIRMID2_TRAIN_INPUT, PAIRMID2_TRAIN_TARGET,
                           SEQ_TRAIN_SAMPLES, -1.5, 1.5,
@@ -1501,12 +1630,25 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
         struct timespec t0, t1;
         clock_gettime(CLOCK_MONOTONIC, &t0);
 
-        const double loss = task_uses_best1(task)
-            ? de_solve_lpsr_best1(total_params, task->popsize,
+        double loss;
+        const int strategy = task_mutation_strategy(task);
+        if (strategy == 3)
+            loss = de_solve_lpsr_anneal(total_params, task->popsize,
                                   task->min_popsize, generations,
                                   task->bounds_min, task->bounds_max,
-                                  task_loss, seed, run_weights)
-            : de_solve_lpsr_best(total_params, task->popsize,
+                                  task_loss, seed, run_weights);
+        else if (strategy == 2)
+            loss = de_solve_lpsr_curtobest1(total_params, task->popsize,
+                                  task->min_popsize, generations,
+                                  task->bounds_min, task->bounds_max,
+                                  task_loss, seed, run_weights);
+        else if (strategy == 1)
+            loss = de_solve_lpsr_best1(total_params, task->popsize,
+                                  task->min_popsize, generations,
+                                  task->bounds_min, task->bounds_max,
+                                  task_loss, seed, run_weights);
+        else
+            loss = de_solve_lpsr_best(total_params, task->popsize,
                                  task->min_popsize, generations,
                                  task->bounds_min, task->bounds_max,
                                  task_loss, seed, run_weights);

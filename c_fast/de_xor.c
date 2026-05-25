@@ -191,8 +191,10 @@ static genann *task_ann(const NnTask *task) {
 
 static const NnTask *current_task;
 
-static int task_uses_best1(const NnTask *task) {
-    return strstr(task->name, "-best1") != NULL;
+static int task_mutation_strategy(const NnTask *task) {
+    if (strstr(task->name, "-curtobest1")) return 2;
+    if (strstr(task->name, "-best1"))     return 1;
+    return 0;
 }
 
 static double task_loss(const double *weights, int n) {
@@ -331,21 +333,23 @@ static int run_task(const NnTask *task) {
         struct timespec t0, t1;
         clock_gettime(CLOCK_MONOTONIC, &t0);
 
-        const double loss = task_uses_best1(task)
-            ? de_solve_lpsr_best1(weights, task->popsize,
-                                  task->min_popsize,
-                                  task->generations,
-                                  task->bounds_min,
-                                  task->bounds_max,
-                                  task_loss, seed,
-                                  run_weights)
-            : de_solve_lpsr_best(weights, task->popsize,
-                                 task->min_popsize,
-                                 task->generations,
-                                 task->bounds_min,
-                                 task->bounds_max,
-                                               task_loss, seed,
-                                               run_weights);
+        double loss;
+        const int strategy = task_mutation_strategy(task);
+        if (strategy == 2)
+            loss = de_solve_lpsr_curtobest1(weights, task->popsize,
+                                  task->min_popsize, task->generations,
+                                  task->bounds_min, task->bounds_max,
+                                  task_loss, seed, run_weights);
+        else if (strategy == 1)
+            loss = de_solve_lpsr_best1(weights, task->popsize,
+                                  task->min_popsize, task->generations,
+                                  task->bounds_min, task->bounds_max,
+                                  task_loss, seed, run_weights);
+        else
+            loss = de_solve_lpsr_best(weights, task->popsize,
+                                 task->min_popsize, task->generations,
+                                 task->bounds_min, task->bounds_max,
+                                 task_loss, seed, run_weights);
 
         clock_gettime(CLOCK_MONOTONIC, &t1);
         const long ms = elapsed_ms(t0, t1);

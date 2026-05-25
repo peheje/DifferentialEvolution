@@ -49,6 +49,12 @@ static inline void de_pick2_excluding(uint64_t *state, int popsize, int i, int e
     do { *r1 = de_rand_int(state, popsize); } while (*r1 == i || *r1 == excl || *r1 == *r0);
 }
 
+static inline void de_pick2(uint64_t *state, int popsize, int i,
+                             int *r0, int *r1) {
+    do { *r0 = de_rand_int(state, popsize); } while (*r0 == i);
+    do { *r1 = de_rand_int(state, popsize); } while (*r1 == i || *r1 == *r0);
+}
+
 static inline void de_pick3(uint64_t *state, int popsize, int i,
                             int *r0, int *r1, int *r2) {
     do { *r0 = de_rand_int(state, popsize); } while (*r0 == i);
@@ -184,7 +190,7 @@ static double de_state_evolve(
     double (*objective)(const double *xs, int n),
     uint64_t seed,
     double  *best_out,
-    int      use_best1)
+    int      mutation_strategy)
 {
     if (!de_state || de_state->params <= 0 || de_state->active_popsize < 4 ||
         min_popsize < 4 || min_popsize > de_state->active_popsize ||
@@ -229,7 +235,7 @@ static double de_state_evolve(
 
     /* ── main loop ───────────────────────────────────────────── */
     int best_idx = 0;
-#pragma omp parallel default(none) shared(params, agent_len, pop, prev_pop, trial_scratch, scores, Fi, CRi, tmp_scores, tmp_Fi, tmp_CRi, rank, rng_states, active_popsize, initial_popsize, min_popsize, use_lpsr, generations, bounds_min, bounds_max, objective, best_idx, use_best1)
+#pragma omp parallel default(none) shared(params, agent_len, pop, prev_pop, trial_scratch, scores, Fi, CRi, tmp_scores, tmp_Fi, tmp_CRi, rank, rng_states, active_popsize, initial_popsize, min_popsize, use_lpsr, generations, bounds_min, bounds_max, objective, best_idx, mutation_strategy)
     {
         const int tid = omp_get_thread_num();
         uint64_t *state = &rng_states[tid];
@@ -243,7 +249,7 @@ static double de_state_evolve(
             for (size_t k = 0; k < active_len; ++k)
                 prev_pop[k] = pop[k];
 
-            if (use_best1) {
+            if (mutation_strategy) {
 #pragma omp single
                 {
                     best_idx = 0;
@@ -270,14 +276,58 @@ static double de_state_evolve(
                 const double *x0, *x1, *x2;
                 const double *xt_prev = prev_pop + (size_t)i * agent_len;
                 double *xt       = pop + (size_t)i  * agent_len;
+                int is_curtobest = 0;
 
-                if (use_best1) {
+                if (mutation_strategy == 1) {
                     /* ── DE/best/1/bin ────────────────────── */
                     int i1, i2;
                     de_pick2_excluding(state, active, i, best_idx, &i1, &i2);
                     x0 = prev_pop + (size_t)best_idx * agent_len;
                     x1 = prev_pop + (size_t)i1      * agent_len;
                     x2 = prev_pop + (size_t)i2      * agent_len;
+                } else if (mutation_strategy == 2) {
+                    /* ── DE/current-to-best/1/bin ─────────── */
+                    int i1, i2;
+                    de_pick2(state, active, i, &i1, &i2);
+                    x0 = prev_pop + (size_t)best_idx * agent_len;
+                    x1 = prev_pop + (size_t)i1      * agent_len;
+                    x2 = prev_pop + (size_t)i2      * agent_len;
+                    is_curtobest = 1;
+                } else if (mutation_strategy == 3) {
+                    /* ── DE/annealed-rand-to-best/1/bin ──────
+                       λ = (gens-g)/gens, anneals rand→best  */
+                    int ir, i1, i2;
+                    de_pick2_excluding(state, active, i, best_idx, &ir, &i1);
+                    do { i2 = de_rand_int(state, active); }
+                        while (i2 == i || i2 == ir || i2 == i1);
+                    x0 = prev_pop + (size_t)ir       * agent_len;
+                    x1 = prev_pop + (size_t)i1       * agent_len;
+                    x2 = prev_pop + (size_t)i2       * agent_len;
+                    {
+                        const double lam = (double)(generations - g)
+                                         / (double)generations;
+                        const double *xb = prev_pop
+                                         + (size_t)best_idx * agent_len;
+                        for (int j = 0; j < params; ++j) {
+                            const double base = lam * x0[j]
+                                              + (1.0 - lam) * xb[j];
+                            if (de_rand01(state) < CRi_try)
+                                trial[j] = de_clamp(
+                                    base + (x1[j] - x2[j]) * Fi_try,
+                                    bounds_min, bounds_max);
+                            else
+                                trial[j] = xt_prev[j];
+                        }
+                        /* skip the normal param loop below */
+                        const double trial_score = objective(trial, params);
+                        if (trial_score < scores[i]) {
+                            memcpy(xt, trial, agent_len * sizeof(double));
+                            scores[i] = trial_score;
+                            Fi[i]  = Fi_try;
+                            CRi[i] = CRi_try;
+                        }
+                        continue;
+                    }
                 } else {
                     /* ── DE/rand/1/bin ────────────────────── */
                     int i0, i1, i2;
@@ -288,11 +338,20 @@ static double de_state_evolve(
                 }
 
                 for (int j = 0; j < params; ++j) {
-                    if (de_rand01(state) < CRi_try)
-                        trial[j] = de_clamp(x0[j] + (x1[j] - x2[j]) * Fi_try,
-                                            bounds_min, bounds_max);
-                    else
+                    if (de_rand01(state) < CRi_try) {
+                        if (is_curtobest)
+                            trial[j] = de_clamp(
+                                xt_prev[j]
+                                + Fi_try * (x0[j] - xt_prev[j])
+                                + Fi_try * (x1[j] - x2[j]),
+                                bounds_min, bounds_max);
+                        else
+                            trial[j] = de_clamp(
+                                x0[j] + (x1[j] - x2[j]) * Fi_try,
+                                bounds_min, bounds_max);
+                    } else {
                         trial[j] = xt_prev[j];
+                    }
                 }
 
                 const double trial_score = objective(trial, params);
@@ -365,7 +424,7 @@ static double de_solve_impl(
     double (*objective)(const double *xs, int n),
     uint64_t seed,
     double  *best_out,
-    int      use_best1)
+    int      mutation_strategy)
 {
     if (params <= 0 || initial_popsize < 4 || min_popsize < 4 ||
         min_popsize > initial_popsize || generations < 0 || !objective)
@@ -378,7 +437,7 @@ static double de_solve_impl(
     de_state_init_random(&state, bounds_min, bounds_max, objective, seed);
     const double best = de_state_evolve(&state, min_popsize, generations,
                                         bounds_min, bounds_max, objective,
-                                        seed, best_out, use_best1);
+                                        seed, best_out, mutation_strategy);
     de_state_free(&state);
     return best;
 }
@@ -438,6 +497,36 @@ static inline double de_solve_lpsr_best1(
 {
     return de_solve_impl(params, initial_popsize, min_popsize, generations,
                          bounds_min, bounds_max, objective, seed, best_out, 1);
+}
+
+static inline double de_solve_lpsr_curtobest1(
+    int      params,
+    int      initial_popsize,
+    int      min_popsize,
+    int      generations,
+    double   bounds_min,
+    double   bounds_max,
+    double (*objective)(const double *xs, int n),
+    uint64_t seed,
+    double  *best_out)
+{
+    return de_solve_impl(params, initial_popsize, min_popsize, generations,
+                         bounds_min, bounds_max, objective, seed, best_out, 2);
+}
+
+static inline double de_solve_lpsr_anneal(
+    int      params,
+    int      initial_popsize,
+    int      min_popsize,
+    int      generations,
+    double   bounds_min,
+    double   bounds_max,
+    double (*objective)(const double *xs, int n),
+    uint64_t seed,
+    double  *best_out)
+{
+    return de_solve_impl(params, initial_popsize, min_popsize, generations,
+                         bounds_min, bounds_max, objective, seed, best_out, 3);
 }
 
 #endif /* DE_SOLVER_H */
