@@ -1247,6 +1247,133 @@ static double const *genann_run_ln(genann const *ann, double const *inputs) {
     return ret;
 }
 
+/* ── batched forward pass ─────────────────────────────────────────
+   Evaluates all samples at once with hand-rolled matmuls instead of
+   512 individual genann_run calls. Two GEMM-like operations + bias
+   replace the per-sample loop, letting the compiler auto-vectorize. */
+
+static _Thread_local double *tl_batch_hidden;   /* [samples*hidden] */
+static _Thread_local double *tl_batch_out;      /* [samples*outputs] */
+static _Thread_local double *tl_batch_W;        /* weight extraction */
+static _Thread_local double *tl_batch_bias;     /* bias extraction */
+static _Thread_local int tl_batch_samples;
+static _Thread_local int tl_batch_inputs;
+static _Thread_local int tl_batch_hidden_n;
+static _Thread_local int tl_batch_outputs;
+
+static void batch_ensure_buffers(int samples, int inputs,
+                                  int hidden, int outputs) {
+    if (tl_batch_samples == samples && tl_batch_inputs == inputs &&
+        tl_batch_hidden_n == hidden && tl_batch_outputs == outputs)
+        return;
+
+    free(tl_batch_hidden);
+    free(tl_batch_out);
+    const int reg_w = (inputs + 1) * hidden + (hidden + 1) * outputs;
+    const int n_bias = hidden + outputs;
+    free(tl_batch_W);
+    free(tl_batch_bias);
+
+    tl_batch_hidden = (double *)malloc(
+        (size_t)samples * (size_t)hidden * sizeof(double));
+    tl_batch_out = (double *)malloc(
+        (size_t)samples * (size_t)outputs * sizeof(double));
+    tl_batch_W = (double *)malloc((size_t)reg_w * sizeof(double));
+    tl_batch_bias = (double *)malloc((size_t)n_bias * sizeof(double));
+    if (!tl_batch_hidden || !tl_batch_out || !tl_batch_W || !tl_batch_bias) {
+        fprintf(stderr, "batch buffer alloc failed\n");
+        abort();
+    }
+    tl_batch_samples = samples;
+    tl_batch_inputs = inputs;
+    tl_batch_hidden_n = hidden;
+    tl_batch_outputs = outputs;
+}
+
+/* Extract genann flat weights into W/bias arrays.  W is packed
+   [hidden*inputs][hidden*(hidden_layers-1)*hidden][outputs*hidden].
+   Biases are stored negated (genann convention: sum = *w++ * -1.0). */
+static void batch_extract_weights(const genann *ann) {
+    const double *w = ann->weight;
+    double *W = tl_batch_W;
+    double *B = tl_batch_bias;
+
+    for (int h = 0; h < ann->hidden_layers; ++h) {
+        const int prev = (h == 0) ? ann->inputs : ann->hidden;
+        for (int j = 0; j < ann->hidden; ++j) {
+            B[h * ann->hidden + j] = -(*w++);
+            for (int k = 0; k < prev; ++k)
+                W[(h * ann->hidden + j) * prev + k] = *w++;
+        }
+    }
+    /* output layer */
+    const int out_off = ann->hidden_layers * ann->hidden;
+    for (int o = 0; o < ann->outputs; ++o) {
+        B[out_off + o] = -(*w++);
+        for (int k = 0; k < ann->hidden; ++k)
+            W[out_off * ann->hidden + o * ann->hidden + k] = *w++;
+    }
+}
+
+/* batched forward: hidden = act(input * W_h^T + bias_h), then output */
+static void batch_forward(const genann *ann,
+                          const double *input,   /* [samples*inputs] */
+                          double *output,         /* [samples*outputs] */
+                          int samples) {
+    const int I = ann->inputs, H = ann->hidden, O = ann->outputs;
+
+    /* hidden layer(s): pre-act then activate */
+    for (int h = 0; h < ann->hidden_layers; ++h) {
+        const int prev = (h == 0) ? I : H;
+        const double * __restrict Wl = tl_batch_W
+            + (size_t)h * H * prev;
+        const double * __restrict Bl = tl_batch_bias
+            + (size_t)h * H;
+        const double * __restrict inp = (h == 0) ? input
+            : tl_batch_hidden;
+        double * __restrict out = tl_batch_hidden;
+
+        for (int s = 0; s < samples; ++s) {
+            const double * __restrict xs = inp + (size_t)s * prev;
+            double * __restrict ys = out + (size_t)s * H;
+            for (int j = 0; j < H; ++j) {
+                double sum = Bl[j];
+                const double * __restrict wr = Wl + (size_t)j * prev;
+                for (int k = 0; k < prev; ++k)
+                    sum += xs[k] * wr[k];
+                ys[j] = sum;
+            }
+        }
+
+        /* activation */
+        for (int s = 0; s < samples; ++s) {
+            double * __restrict ys = tl_batch_hidden + (size_t)s * H;
+            for (int j = 0; j < H; ++j)
+                ys[j] = ann->activation_hidden(ann, ys[j]);
+        }
+    }
+
+    /* output layer */
+    {
+        const int off = ann->hidden_layers * H;
+        const double * __restrict Wo = tl_batch_W
+            + (size_t)off * H;  /* [O * H] */
+        const double * __restrict Bo = tl_batch_bias + off;
+
+        for (int s = 0; s < samples; ++s) {
+            const double * __restrict hs = tl_batch_hidden + (size_t)s * H;
+            double * __restrict ys = output + (size_t)s * O;
+            for (int o = 0; o < O; ++o) {
+                double sum = Bo[o];
+                const double * __restrict wr = Wo + (size_t)o * H;
+                for (int k = 0; k < H; ++k)
+                    sum += hs[k] * wr[k];
+                ys[o] = ann->activation_output(ann, sum);
+            }
+        }
+    }
+}
+
 static genann *task_ann(const NnTask *task) {
     if (thread_task != task) {
         genann_free(thread_ann);
@@ -1342,7 +1469,8 @@ static double task_loss(const double *weights, int n) {
 
     const int n_reg = ann->total_weights;
     memcpy(ann->weight, weights, (size_t)n_reg * sizeof(double));
-    if (task_uses_layernorm(task)) {
+    const int use_ln = task_uses_layernorm(task);
+    if (use_ln) {
         const int n_ln = task->hidden * task->hidden_layers;
         memcpy(thread_ln_gamma, weights + n_reg,
                (size_t)n_ln * sizeof(double));
@@ -1350,59 +1478,106 @@ static double task_loss(const double *weights, int n) {
                (size_t)n_ln * sizeof(double));
     }
 
+    const int use_rollout = task->rollout_loss_weight > 0.0;
     const double dw_strength = task_distance_weight_strength(task);
     const double huber_delta = task_huber_delta(task);
-    const double r_max = 2.5 * 1.41421356237; /* sqrt(2) * 2.5 */
+    const double r_max = 2.5 * 1.41421356237;
+    const int samples = task->samples;
+    const int inputs = task->inputs;
+    const int outputs = task->outputs;
+    const int t_stride = task->target_stride;
+
+    /* ── batched path: no rollout, no LN ─────────────────────────── */
+    if (!use_rollout && !use_ln) {
+        batch_ensure_buffers(samples, inputs, ann->hidden, outputs);
+        batch_extract_weights(ann);
+        batch_forward(ann, task->input, tl_batch_out, samples);
+
+        double loss = 0.0, max_sq = 0.0, total_weight = 0.0;
+        for (int i = 0; i < samples; ++i) {
+            const double *target = task->target + (size_t)i * t_stride;
+            const double *ys = tl_batch_out + (size_t)i * outputs;
+            const double sw = dw_strength > 0.0
+                ? 1.0 + dw_strength * (sqrt(
+                    task->input[(size_t)i * inputs]
+                    * task->input[(size_t)i * inputs]
+                    + task->input[(size_t)i * inputs + 1]
+                    * task->input[(size_t)i * inputs + 1]) / r_max)
+                : 1.0;
+
+            for (int o = 0; o < outputs; ++o) {
+                const double w = o == 0 ? 1.0 : task->aux_loss_weight;
+                const double e = ys[o] - target[o];
+                if (task_uses_max_loss(task)) {
+                    const double sq = e * e;
+                    if (sq > max_sq) max_sq = sq;
+                } else if (huber_delta > 0.0) {
+                    const double ae = fabs(e);
+                    loss += sw * w * (ae <= huber_delta
+                        ? 0.5 * e * e
+                        : huber_delta * (ae - 0.5 * huber_delta));
+                    total_weight += sw * w;
+                } else if (task_uses_mae_loss(task)) {
+                    loss += sw * w * fabs(e);
+                    total_weight += sw * w;
+                } else {
+                    loss += sw * w * e * e;
+                    total_weight += sw * w;
+                }
+            }
+        }
+        if (task_uses_max_loss(task)) return max_sq;
+        return total_weight > 0.0 ? loss / total_weight : loss;
+    }
+
+    /* ── fallback per-sample path (rollout or LN) ────────────────── */
     double loss = 0.0;
-    double max_sq = 0.0;
-    double total_weight = 0.0;
-    for (int i = 0; i < task->samples; ++i) {
-        const double *input  = task->input + (size_t)i * task->inputs;
-        const double *target = task->target + (size_t)i * task->target_stride;
+    double max_sq2 = 0.0;
+    double total_weight2 = 0.0;
+    for (int i = 0; i < samples; ++i) {
+        const double *input  = task->input + (size_t)i * inputs;
+        const double *target = task->target + (size_t)i * t_stride;
 
         const double sw = dw_strength > 0.0
             ? 1.0 + dw_strength * (sqrt(input[0] * input[0]
                                       + input[1] * input[1]) / r_max)
             : 1.0;
 
-        if (task->rollout_loss_weight > 0.0) {
+        if (use_rollout) {
             const double y0 = genann_run_ln(ann, input)[0];
             const double next_input[2] = { y0, input[0] };
             const double y1 = genann_run_ln(ann, next_input)[0];
             const double e0 = y0 - target[0];
             const double e1 = y1 - target[1];
             loss += sw * (e0 * e0 + task->rollout_loss_weight * e1 * e1);
-            total_weight += sw * (1.0 + task->rollout_loss_weight);
+            total_weight2 += sw * (1.0 + task->rollout_loss_weight);
             continue;
         }
 
         const double *output = genann_run_ln(ann, input);
-        for (int o = 0; o < task->outputs; ++o) {
+        for (int o = 0; o < outputs; ++o) {
             const double w = o == 0 ? 1.0 : task->aux_loss_weight;
             const double e = output[o] - target[o];
             const double sq = e * e;
             if (task_uses_max_loss(task)) {
-                if (sq > max_sq)
-                    max_sq = sq;
+                if (sq > max_sq2) max_sq2 = sq;
             } else if (huber_delta > 0.0) {
                 const double ae = fabs(e);
-                if (ae <= huber_delta)
-                    loss += sw * w * 0.5 * e * e;
-                else
-                    loss += sw * w * huber_delta * (ae - 0.5 * huber_delta);
-                total_weight += sw * w;
+                loss += sw * w * (ae <= huber_delta
+                    ? 0.5 * e * e
+                    : huber_delta * (ae - 0.5 * huber_delta));
+                total_weight2 += sw * w;
             } else if (task_uses_mae_loss(task)) {
                 loss += sw * w * fabs(e);
-                total_weight += sw * w;
+                total_weight2 += sw * w;
             } else {
                 loss += sw * w * sq;
-                total_weight += sw * w;
+                total_weight2 += sw * w;
             }
         }
     }
-    if (task_uses_max_loss(task))
-        return max_sq;
-    return total_weight > 0.0 ? loss / total_weight : loss;
+    if (task_uses_max_loss(task)) return max_sq2;
+    return total_weight2 > 0.0 ? loss / total_weight2 : loss;
 }
 
 /* ── helpers ────────────────────────────────────────────────────── */
