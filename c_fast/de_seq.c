@@ -1982,6 +1982,8 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
            task->popsize, task->min_popsize, generations, eval_budget, runs);
     printf("%-5s %14s %10s\n", "run", "loss", "ms");
 
+    struct timespec wall_t0, wall_t1;
+    clock_gettime(CLOCK_MONOTONIC, &wall_t0);
     for (int r = 0; r < runs; ++r) {
         const uint64_t seed = base_seed + (uint64_t)r * 0x9e3779b97f4a7c15ULL;
         struct timespec t0, t1;
@@ -2033,8 +2035,10 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
         printf("%-5d %14.8g %10ld\n", r, loss, ms);
     }
 
-    printf("best loss %.8g seed 0x%016llx ms %ld\n\n",
-           best_loss, (unsigned long long)best_seed, best_ms);
+    clock_gettime(CLOCK_MONOTONIC, &wall_t1);
+    printf("best loss %.8g seed 0x%016llx ms %ld  wall %ldms\n\n",
+           best_loss, (unsigned long long)best_seed, best_ms,
+           elapsed_ms(wall_t0, wall_t1));
 
     /* ── print sample predictions ──────────────────────────────── */
     genann *ann = genann_init(task->inputs, task->hidden_layers,
