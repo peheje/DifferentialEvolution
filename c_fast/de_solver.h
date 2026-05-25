@@ -209,7 +209,7 @@ static double de_state_evolve(
     double *tmp_scores    = use_lpsr ? (double *)malloc((size_t)initial_popsize * sizeof(double)) : NULL;
     double *tmp_Fi        = use_lpsr ? (double *)malloc((size_t)initial_popsize * sizeof(double)) : NULL;
     double *tmp_CRi       = use_lpsr ? (double *)malloc((size_t)initial_popsize * sizeof(double)) : NULL;
-    const int use_rank = use_lpsr || mutation_strategy == 4;
+    const int use_rank = use_lpsr || mutation_strategy == 4 || mutation_strategy == 5;
     DeRank *rank          = use_rank ? (DeRank *)malloc((size_t)initial_popsize * sizeof(DeRank)) : NULL;
     if (!prev_pop || !trial_scratch ||
         ((use_lpsr && (!tmp_scores || !tmp_Fi || !tmp_CRi)) ||
@@ -263,7 +263,7 @@ static double de_state_evolve(
                             best_idx = i;
                         }
                     }
-                    if (mutation_strategy == 4) {
+                    if (mutation_strategy == 4 || mutation_strategy == 5) {
                         for (int i = 0; i < active; ++i) {
                             rank[i].score = scores[i];
                             rank[i].index = i;
