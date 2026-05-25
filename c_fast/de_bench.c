@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include "de_solver.h"
@@ -107,6 +108,7 @@ int main(void) {
         {"lpsr96",  POPSIZE, 96},
         {"lpsr64",  POPSIZE, 64},
         {"lpsr32",  POPSIZE, 32},
+        {"best1",   POPSIZE, POPSIZE},
     };
     const int solver_count = (int)(sizeof(solvers) / sizeof(solvers[0]));
     const uint64_t base_seed = 0xD1FF3A9E2B1C4D77ULL;
@@ -131,14 +133,24 @@ int main(void) {
                 struct timespec t0, t1;
                 clock_gettime(CLOCK_MONOTONIC, &t0);
 
-                const double score = de_solve_lpsr(b->params,
-                                                   solver->initial_popsize,
-                                                   solver->min_popsize,
-                                                   b->generations,
-                                                   b->bounds_min,
-                                                   b->bounds_max,
-                                                   b->objective,
-                                                   seed);
+                const int use_best1 = strstr(solver->name, "best1") != NULL;
+                const double score = use_best1
+                    ? de_solve_lpsr_best1(b->params,
+                                          solver->initial_popsize,
+                                          solver->min_popsize,
+                                          b->generations,
+                                          b->bounds_min,
+                                          b->bounds_max,
+                                          b->objective,
+                                          seed, NULL)
+                    : de_solve_lpsr(b->params,
+                                    solver->initial_popsize,
+                                    solver->min_popsize,
+                                    b->generations,
+                                    b->bounds_min,
+                                    b->bounds_max,
+                                    b->objective,
+                                    seed);
 
                 clock_gettime(CLOCK_MONOTONIC, &t1);
 

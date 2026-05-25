@@ -143,6 +143,30 @@ static const NnTask TASKS[] = {
         CIRCLE_BOUNDARY_INPUT, CIRCLE_BOUNDARY_TARGET,
         CIRCLE_TEST_SAMPLES, CIRCLE_TEST_INPUT, CIRCLE_TEST_TARGET,
     },
+    {
+        "xor-best1",
+        2, 1, 2, 4,
+        256, 128, 4000,
+        -10.0, 10.0, 1e-3,
+        XOR_INPUT, XOR_TARGET,
+        4, XOR_INPUT, XOR_TARGET,
+    },
+    {
+        "parity3-best1",
+        3, 1, 6, 8,
+        512, 256, 12000,
+        -12.0, 12.0, 1e-3,
+        PARITY3_INPUT, PARITY3_TARGET,
+        8, PARITY3_INPUT, PARITY3_TARGET,
+    },
+    {
+        "parity4-wide-best1",
+        4, 1, 12, 16,
+        1024, 512, 30000,
+        -14.0, 14.0, 1e-3,
+        PARITY4_INPUT, PARITY4_TARGET,
+        16, PARITY4_INPUT, PARITY4_TARGET,
+    },
 };
 
 static _Thread_local genann *thread_ann;
@@ -166,6 +190,10 @@ static genann *task_ann(const NnTask *task) {
 }
 
 static const NnTask *current_task;
+
+static int task_uses_best1(const NnTask *task) {
+    return strstr(task->name, "-best1") != NULL;
+}
 
 static double task_loss(const double *weights, int n) {
     const NnTask *task = current_task;
@@ -303,11 +331,19 @@ static int run_task(const NnTask *task) {
         struct timespec t0, t1;
         clock_gettime(CLOCK_MONOTONIC, &t0);
 
-        const double loss = de_solve_lpsr_best(weights, task->popsize,
-                                               task->min_popsize,
-                                               task->generations,
-                                               task->bounds_min,
-                                               task->bounds_max,
+        const double loss = task_uses_best1(task)
+            ? de_solve_lpsr_best1(weights, task->popsize,
+                                  task->min_popsize,
+                                  task->generations,
+                                  task->bounds_min,
+                                  task->bounds_max,
+                                  task_loss, seed,
+                                  run_weights)
+            : de_solve_lpsr_best(weights, task->popsize,
+                                 task->min_popsize,
+                                 task->generations,
+                                 task->bounds_min,
+                                 task->bounds_max,
                                                task_loss, seed,
                                                run_weights);
 
