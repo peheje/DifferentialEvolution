@@ -40,6 +40,7 @@ msbuild.wrn
 # Local benchmark binaries
 c_fast/de_c
 c_fast/de_bench
+c_fast/de_xor
 c_fast/settlement
 kotlin/untitled/src/main/kotlin/*.jar
 

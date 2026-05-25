@@ -85,7 +85,8 @@ static double de_solve_impl(
     double   bounds_min,
     double   bounds_max,
     double (*objective)(const double *xs, int n),
-    uint64_t seed)
+    uint64_t seed,
+    double  *best_out)
 {
     if (params <= 0 || initial_popsize < 4 || min_popsize < 4 ||
         min_popsize > initial_popsize || generations < 0 || !objective)
@@ -225,9 +226,17 @@ static double de_solve_impl(
         }
     }
 
+    int best_idx = 0;
     double best = scores[0];
-    for (int i = 1; i < active_popsize; ++i)
-        if (scores[i] < best) best = scores[i];
+    for (int i = 1; i < active_popsize; ++i) {
+        if (scores[i] < best) {
+            best = scores[i];
+            best_idx = i;
+        }
+    }
+    if (best_out)
+        memcpy(best_out, pop + (size_t)best_idx * agent_len,
+               agent_len * sizeof(double));
 
     free(rng_states);
     free(pop);
@@ -253,7 +262,7 @@ static inline double de_solve(
     uint64_t seed)
 {
     return de_solve_impl(params, popsize, popsize, generations,
-                         bounds_min, bounds_max, objective, seed);
+                         bounds_min, bounds_max, objective, seed, NULL);
 }
 
 static inline double de_solve_lpsr(
@@ -267,7 +276,22 @@ static inline double de_solve_lpsr(
     uint64_t seed)
 {
     return de_solve_impl(params, initial_popsize, min_popsize, generations,
-                         bounds_min, bounds_max, objective, seed);
+                         bounds_min, bounds_max, objective, seed, NULL);
+}
+
+static inline double de_solve_lpsr_best(
+    int      params,
+    int      initial_popsize,
+    int      min_popsize,
+    int      generations,
+    double   bounds_min,
+    double   bounds_max,
+    double (*objective)(const double *xs, int n),
+    uint64_t seed,
+    double  *best_out)
+{
+    return de_solve_impl(params, initial_popsize, min_popsize, generations,
+                         bounds_min, bounds_max, objective, seed, best_out);
 }
 
 #endif /* DE_SOLVER_H */
