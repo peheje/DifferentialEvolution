@@ -94,6 +94,7 @@ static double de_solve_impl(
     const size_t agent_len = (size_t)params;
     const size_t capacity_len = (size_t)initial_popsize * agent_len;
     const int threads = omp_get_max_threads();
+    const int use_lpsr = min_popsize < initial_popsize;
 
     double *pop           = (double *)malloc(capacity_len * sizeof(double));
     double *prev_pop      = (double *)malloc(capacity_len * sizeof(double));
@@ -101,12 +102,12 @@ static double de_solve_impl(
     double *scores        = (double *)malloc((size_t)initial_popsize * sizeof(double));
     double *Fi            = (double *)malloc((size_t)initial_popsize * sizeof(double));
     double *CRi           = (double *)malloc((size_t)initial_popsize * sizeof(double));
-    double *tmp_scores    = (double *)malloc((size_t)initial_popsize * sizeof(double));
-    double *tmp_Fi        = (double *)malloc((size_t)initial_popsize * sizeof(double));
-    double *tmp_CRi       = (double *)malloc((size_t)initial_popsize * sizeof(double));
-    DeRank *rank          = (DeRank *)malloc((size_t)initial_popsize * sizeof(DeRank));
+    double *tmp_scores    = use_lpsr ? (double *)malloc((size_t)initial_popsize * sizeof(double)) : NULL;
+    double *tmp_Fi        = use_lpsr ? (double *)malloc((size_t)initial_popsize * sizeof(double)) : NULL;
+    double *tmp_CRi       = use_lpsr ? (double *)malloc((size_t)initial_popsize * sizeof(double)) : NULL;
+    DeRank *rank          = use_lpsr ? (DeRank *)malloc((size_t)initial_popsize * sizeof(DeRank)) : NULL;
     if (!pop || !prev_pop || !trial_scratch || !scores || !Fi || !CRi ||
-        !tmp_scores || !tmp_Fi || !tmp_CRi || !rank) {
+        (use_lpsr && (!tmp_scores || !tmp_Fi || !tmp_CRi || !rank))) {
         free(pop); free(prev_pop); free(trial_scratch);
         free(scores); free(Fi); free(CRi);
         free(tmp_scores); free(tmp_Fi); free(tmp_CRi); free(rank);
@@ -138,7 +139,7 @@ static double de_solve_impl(
     int active_popsize = initial_popsize;
 
     /* ── main loop ───────────────────────────────────────────── */
-#pragma omp parallel default(none) shared(params, agent_len, pop, prev_pop, trial_scratch, scores, Fi, CRi, tmp_scores, tmp_Fi, tmp_CRi, rank, rng_states, active_popsize, initial_popsize, min_popsize, generations, bounds_min, bounds_max, objective)
+#pragma omp parallel default(none) shared(params, agent_len, pop, prev_pop, trial_scratch, scores, Fi, CRi, tmp_scores, tmp_Fi, tmp_CRi, rank, rng_states, active_popsize, initial_popsize, min_popsize, use_lpsr, generations, bounds_min, bounds_max, objective)
     {
         const int tid = omp_get_thread_num();
         uint64_t *state = &rng_states[tid];
@@ -189,34 +190,36 @@ static double de_solve_impl(
                 }
             }
 
+            if (use_lpsr) {
 #pragma omp single
-            {
-                const int next_active = de_lpsr_population_size(initial_popsize,
-                                                               min_popsize,
-                                                               generations,
-                                                               g);
-                if (next_active < active_popsize) {
-                    for (int i = 0; i < active_popsize; ++i) {
-                        rank[i].score = scores[i];
-                        rank[i].index = i;
-                    }
-                    qsort(rank, (size_t)active_popsize, sizeof(rank[0]), de_rank_compare);
+                {
+                    const int next_active = de_lpsr_population_size(initial_popsize,
+                                                                   min_popsize,
+                                                                   generations,
+                                                                   g);
+                    if (next_active < active_popsize) {
+                        for (int i = 0; i < active_popsize; ++i) {
+                            rank[i].score = scores[i];
+                            rank[i].index = i;
+                        }
+                        qsort(rank, (size_t)active_popsize, sizeof(rank[0]), de_rank_compare);
 
-                    for (int i = 0; i < next_active; ++i) {
-                        const int old = rank[i].index;
-                        memcpy(prev_pop + (size_t)i * agent_len,
-                               pop + (size_t)old * agent_len,
-                               agent_len * sizeof(double));
-                        tmp_scores[i] = scores[old];
-                        tmp_Fi[i] = Fi[old];
-                        tmp_CRi[i] = CRi[old];
-                    }
+                        for (int i = 0; i < next_active; ++i) {
+                            const int old = rank[i].index;
+                            memcpy(prev_pop + (size_t)i * agent_len,
+                                   pop + (size_t)old * agent_len,
+                                   agent_len * sizeof(double));
+                            tmp_scores[i] = scores[old];
+                            tmp_Fi[i] = Fi[old];
+                            tmp_CRi[i] = CRi[old];
+                        }
 
-                    memcpy(pop, prev_pop, (size_t)next_active * agent_len * sizeof(double));
-                    memcpy(scores, tmp_scores, (size_t)next_active * sizeof(double));
-                    memcpy(Fi, tmp_Fi, (size_t)next_active * sizeof(double));
-                    memcpy(CRi, tmp_CRi, (size_t)next_active * sizeof(double));
-                    active_popsize = next_active;
+                        memcpy(pop, prev_pop, (size_t)next_active * agent_len * sizeof(double));
+                        memcpy(scores, tmp_scores, (size_t)next_active * sizeof(double));
+                        memcpy(Fi, tmp_Fi, (size_t)next_active * sizeof(double));
+                        memcpy(CRi, tmp_CRi, (size_t)next_active * sizeof(double));
+                        active_popsize = next_active;
+                    }
                 }
             }
         }
