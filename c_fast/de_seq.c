@@ -86,6 +86,8 @@ static double PAIRMIX50_2_TRAIN_INPUT [SEQ_TRAIN_SAMPLES * 2];
 static double PAIRMIX50_2_TRAIN_TARGET[SEQ_TRAIN_SAMPLES * 2];
 static double PAIR1_TEST_INPUT [SEQ_TEST_SAMPLES * 2];
 static double PAIR1_TEST_TARGET[SEQ_TEST_SAMPLES];
+static double PAIR_SCALED_TRAIN_INPUT[SEQ_TRAIN_SAMPLES * 2];
+static double PAIR_SCALED_TEST_INPUT[SEQ_TEST_SAMPLES * 2];
 static double PAIR2_TEST_INPUT [SEQ_TEST_SAMPLES * 2];
 static double PAIR2_TEST_TARGET[SEQ_TEST_SAMPLES * 2];
 static double PAIRMID1_TEST_INPUT [SEQ_TEST_SAMPLES * 2];
@@ -386,11 +388,62 @@ static const NnTask TASKS[] = {
         PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
         SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
     },
+    {
+        "pair1-scale",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR_SCALED_TRAIN_INPUT, PAIR1_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR_SCALED_TEST_INPUT, PAIR1_TEST_TARGET,
+    },
+    {
+        "pair1-mae-scale",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR_SCALED_TRAIN_INPUT, PAIR1_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR_SCALED_TEST_INPUT, PAIR1_TEST_TARGET,
+    },
+    {
+        "pair1-ln",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-mae-ln",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
 };
 
 /* ── thread-local genann cache ──────────────────────────────────── */
 static _Thread_local genann *thread_ann;
 static _Thread_local const NnTask *thread_task;
+static _Thread_local double *thread_ln_gamma;
+static _Thread_local double *thread_ln_beta;
+static _Thread_local int thread_ln_hidden;
 
 static void configure_task_ann(genann *ann, const NnTask *task) {
     ann->activation_output = genann_act_linear;
@@ -404,10 +457,100 @@ static void configure_task_ann(genann *ann, const NnTask *task) {
         ann->activation_hidden = act_gelu;
 }
 
+static int task_uses_layernorm(const NnTask *task) {
+    return strstr(task->name, "-ln") != NULL;
+}
+
+static int task_total_params(const NnTask *task, int regular_weights) {
+    if (task_uses_layernorm(task))
+        return regular_weights + 2 * task->hidden * task->hidden_layers;
+    return regular_weights;
+}
+
+/* ── forward pass with optional LayerNorm ──────────────────────────
+   Thread-local: thread_ln_hidden, thread_ln_gamma, thread_ln_beta.
+   When thread_ln_hidden == 0, behaves identically to genann_run.
+   LN normalizes pre-activations across hidden neurons, then applies
+   gamma * norm + beta before activation.                               */
+static double const *genann_run_ln(genann const *ann, double const *inputs) {
+    double const *w = ann->weight;
+    double *o = ann->output + ann->inputs;
+    double const *i = ann->output;
+
+    memcpy(ann->output, inputs, sizeof(double) * ann->inputs);
+
+    int h, j, k;
+
+    if (!ann->hidden_layers) {
+        double *ret = o;
+        for (j = 0; j < ann->outputs; ++j) {
+            double sum = *w++ * -1.0;
+            for (k = 0; k < ann->inputs; ++k)
+                sum += *w++ * i[k];
+            *o++ = ann->activation_output(ann, sum);
+        }
+        return ret;
+    }
+
+    for (h = 0; h < ann->hidden_layers; ++h) {
+        const int prev = (h == 0) ? ann->inputs : ann->hidden;
+
+        if (thread_ln_hidden > h) {
+            for (j = 0; j < ann->hidden; ++j) {
+                double sum = *w++ * -1.0;
+                for (k = 0; k < prev; ++k)
+                    sum += *w++ * i[k];
+                o[j] = sum;
+            }
+            double mean = 0.0;
+            for (j = 0; j < ann->hidden; ++j) mean += o[j];
+            mean /= (double)ann->hidden;
+            double var = 0.0;
+            for (j = 0; j < ann->hidden; ++j) {
+                double d = o[j] - mean;
+                var += d * d;
+            }
+            var /= (double)ann->hidden;
+            double inv_std = 1.0 / sqrt(var + 1e-5);
+            const int ln_off = h * ann->hidden;
+            for (j = 0; j < ann->hidden; ++j) {
+                double v = (o[j] - mean) * inv_std;
+                v = thread_ln_gamma[ln_off + j] * v
+                  + thread_ln_beta[ln_off + j];
+                o[j] = ann->activation_hidden(ann, v);
+            }
+            o += ann->hidden;
+        } else {
+            for (j = 0; j < ann->hidden; ++j) {
+                double sum = *w++ * -1.0;
+                for (k = 0; k < prev; ++k)
+                    sum += *w++ * i[k];
+                *o++ = ann->activation_hidden(ann, sum);
+            }
+        }
+        i += prev;
+    }
+
+    double const *ret = o;
+    for (j = 0; j < ann->outputs; ++j) {
+        double sum = *w++ * -1.0;
+        for (k = 0; k < ann->hidden; ++k)
+            sum += *w++ * i[k];
+        *o++ = ann->activation_output(ann, sum);
+    }
+
+    return ret;
+}
+
 static genann *task_ann(const NnTask *task) {
     if (thread_task != task) {
         genann_free(thread_ann);
         thread_ann = NULL;
+        free(thread_ln_gamma);
+        free(thread_ln_beta);
+        thread_ln_gamma = NULL;
+        thread_ln_beta = NULL;
+        thread_ln_hidden = 0;
         thread_task = task;
     }
     if (!thread_ann) {
@@ -418,6 +561,18 @@ static genann *task_ann(const NnTask *task) {
             abort();
         }
         configure_task_ann(thread_ann, task);
+        if (task_uses_layernorm(task)) {
+            const int n_ln = task->hidden * task->hidden_layers;
+            thread_ln_gamma = (double *)malloc(
+                (size_t)n_ln * sizeof(double));
+            thread_ln_beta = (double *)malloc(
+                (size_t)n_ln * sizeof(double));
+            if (!thread_ln_gamma || !thread_ln_beta) {
+                fprintf(stderr, "LN allocation failed\n");
+                abort();
+            }
+            thread_ln_hidden = task->hidden_layers;
+        }
     }
     return thread_ann;
 }
@@ -433,13 +588,32 @@ static int task_uses_max_loss(const NnTask *task) {
     return strstr(task->name, "-max") != NULL;
 }
 
+static int is_full_box_pair_task(const char *name) {
+    if (strncmp(name, "pair1", 5) != 0) return 0;
+    if (strstr(name, "mid")) return 0;
+    if (strstr(name, "2p0")) return 0;
+    if (strstr(name, "mix")) return 0;
+    if (strstr(name, "roll2")) return 0;
+    if (strstr(name, "scale")) return 0;
+    return 1;
+}
+
 static double task_loss(const double *weights, int n) {
     const NnTask *task = current_task;
     genann *ann = task_ann(task);
-    if (n != ann->total_weights)
+    const int total = task_total_params(task, ann->total_weights);
+    if (n != total)
         return INFINITY;
 
-    memcpy(ann->weight, weights, (size_t)n * sizeof(double));
+    const int n_reg = ann->total_weights;
+    memcpy(ann->weight, weights, (size_t)n_reg * sizeof(double));
+    if (task_uses_layernorm(task)) {
+        const int n_ln = task->hidden * task->hidden_layers;
+        memcpy(thread_ln_gamma, weights + n_reg,
+               (size_t)n_ln * sizeof(double));
+        memcpy(thread_ln_beta, weights + n_reg + n_ln,
+               (size_t)n_ln * sizeof(double));
+    }
 
     double loss = 0.0;
     double max_sq = 0.0;
@@ -448,16 +622,16 @@ static double task_loss(const double *weights, int n) {
         const double *target = task->target + (size_t)i * task->target_stride;
 
         if (task->rollout_loss_weight > 0.0) {
-            const double y0 = genann_run(ann, input)[0];
+            const double y0 = genann_run_ln(ann, input)[0];
             const double next_input[2] = { y0, input[0] };
-            const double y1 = genann_run(ann, next_input)[0];
+            const double y1 = genann_run_ln(ann, next_input)[0];
             const double e0 = y0 - target[0];
             const double e1 = y1 - target[1];
             loss += e0 * e0 + task->rollout_loss_weight * e1 * e1;
             continue;
         }
 
-        const double *output = genann_run(ann, input);
+        const double *output = genann_run_ln(ann, input);
         for (int o = 0; o < task->outputs; ++o) {
             const double w = o == 0 ? 1.0 : task->aux_loss_weight;
             const double e = output[o] - target[o];
@@ -630,6 +804,16 @@ static void init_generated_data(void) {
                           PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
                           SEQ_TEST_SAMPLES, -2.5, 2.5,
                           0x0DD57A7E5EEDULL);
+
+    /* scaled-input copies of pair1: inputs / 2.5 → ~[-1, 1] */
+    for (int i = 0; i < SEQ_TRAIN_SAMPLES; ++i) {
+        PAIR_SCALED_TRAIN_INPUT[i * 2]     = PAIR1_TRAIN_INPUT[i * 2] / 2.5;
+        PAIR_SCALED_TRAIN_INPUT[i * 2 + 1] = PAIR1_TRAIN_INPUT[i * 2 + 1] / 2.5;
+    }
+    for (int i = 0; i < SEQ_TEST_SAMPLES; ++i) {
+        PAIR_SCALED_TEST_INPUT[i * 2]     = PAIR1_TEST_INPUT[i * 2] / 2.5;
+        PAIR_SCALED_TEST_INPUT[i * 2 + 1] = PAIR1_TEST_INPUT[i * 2 + 1] / 2.5;
+    }
     fill_random_pair_data(PAIRMID1_TRAIN_INPUT, PAIRMID1_TRAIN_TARGET,
                           PAIRMID2_TRAIN_INPUT, PAIRMID2_TRAIN_TARGET,
                           SEQ_TRAIN_SAMPLES, -1.5, 1.5,
@@ -665,7 +849,7 @@ static void evaluate_task(genann *ann, const NnTask *task,
     for (int i = 0; i < samples; ++i) {
         const double *xs = input + (size_t)i * task->inputs;
         const double *ts = target + (size_t)i * task->target_stride;
-        const double *ys = genann_run(ann, xs);
+        const double *ys = genann_run_ln(ann, xs);
         for (int o = 0; o < task->outputs; ++o) {
             const double e = ys[o] - ts[o];
             mse += e * e;
@@ -689,7 +873,7 @@ static void evaluate_task_by_output(genann *ann, const NnTask *task,
     for (int i = 0; i < samples; ++i) {
         const double *xs = input + (size_t)i * task->inputs;
         const double *ts = target + (size_t)i * task->target_stride;
-        const double *ys = genann_run(ann, xs);
+        const double *ys = genann_run_ln(ann, xs);
         for (int o = 0; o < task->outputs; ++o) {
             const double e = ys[o] - ts[o];
             mse_out[o] += e * e;
@@ -700,6 +884,139 @@ static void evaluate_task_by_output(genann *ann, const NnTask *task,
     for (int o = 0; o < task->outputs; ++o) {
         mse_out[o] /= (double)samples;
         mae_out[o] /= (double)samples;
+    }
+}
+
+/* ── regional error diagnostics ─────────────────────────────────── */
+enum { REGIONAL_GRID = 200 };
+
+typedef struct {
+    double mse_sum;
+    double mae_sum;
+    double max_abs;
+    int count;
+} RegionalBin;
+
+static void regional_bin_add(RegionalBin *b, double abs_err) {
+    b->mse_sum += abs_err * abs_err;
+    b->mae_sum += abs_err;
+    if (abs_err > b->max_abs) b->max_abs = abs_err;
+    b->count++;
+}
+
+static void regional_print(const char *title,
+                           const RegionalBin *bins, int n,
+                           const char *const *labels) {
+    printf("\n  %s\n", title);
+    printf("  %-22s %8s %10s %10s %10s\n",
+           "region", "count", "MSE", "MAE", "max|e|");
+    for (int i = 0; i < n; ++i) {
+        if (bins[i].count == 0) continue;
+        printf("  %-22s %8d %10.6f %10.6f %10.6f\n",
+               labels[i], bins[i].count,
+               bins[i].mse_sum / bins[i].count,
+               bins[i].mae_sum / bins[i].count,
+               bins[i].max_abs);
+    }
+}
+
+static void evaluate_regional_errors(const genann *ann) {
+    enum { DIST_BINS = 4, GRAD_BINS = 3, CURV_BINS = 3,
+           QUAD_BINS = 4, TMAG_BINS = 3 };
+    RegionalBin dist[DIST_BINS] = {{0}};
+    RegionalBin grad[GRAD_BINS] = {{0}};
+    RegionalBin curv[CURV_BINS] = {{0}};
+    RegionalBin quad[QUAD_BINS] = {{0}};
+    RegionalBin tmag[TMAG_BINS] = {{0}};
+
+    const double lo = -2.5, hi = 2.5;
+    const double step = (hi - lo) / (double)(REGIONAL_GRID - 1);
+    double total_mse = 0.0;
+    int total_n = 0;
+
+    for (int ia = 0; ia < REGIONAL_GRID; ++ia) {
+        const double a = lo + (double)ia * step;
+        for (int ib = 0; ib < REGIONAL_GRID; ++ib) {
+            const double b = lo + (double)ib * step;
+            const double target = recurrence_next(a, b);
+            const double input[2] = {a, b};
+            const double output = genann_run_ln(ann, input)[0];
+            const double abs_err = fabs(output - target);
+
+            total_mse += (output - target) * (output - target);
+            total_n++;
+
+            /* distance from origin */
+            {
+                const double r = sqrt(a * a + b * b);
+                const int idx = r < 1.0 ? 0 : r < 2.0 ? 1 : r < 3.0 ? 2 : 3;
+                regional_bin_add(&dist[idx], abs_err);
+            }
+
+            /* gradient magnitude |df/da| = |2.5*cos(2.5*a)| */
+            {
+                const double g = fabs(cos(2.5 * a));
+                const int idx = g < 0.33 ? 0 : g < 0.67 ? 1 : 2;
+                regional_bin_add(&grad[idx], abs_err);
+            }
+
+            /* curvature |d²f/da²| = |6.25*sin(2.5*a)| */
+            {
+                const double c = fabs(sin(2.5 * a));
+                const int idx = c < 0.33 ? 0 : c < 0.67 ? 1 : 2;
+                regional_bin_add(&curv[idx], abs_err);
+            }
+
+            /* sign quadrant */
+            {
+                const int idx = (a >= 0.0 && b >= 0.0) ? 0
+                              : (a <  0.0 && b >= 0.0) ? 1
+                              : (a <  0.0 && b <  0.0) ? 2 : 3;
+                regional_bin_add(&quad[idx], abs_err);
+            }
+
+            /* target magnitude */
+            {
+                const double at = fabs(target);
+                const int idx = at < 0.8 ? 0 : at < 1.6 ? 1 : 2;
+                regional_bin_add(&tmag[idx], abs_err);
+            }
+        }
+    }
+
+    printf("\n  grid %dx%d overall MSE %.8f  (random test comparison)\n",
+           REGIONAL_GRID, REGIONAL_GRID, total_mse / total_n);
+
+    {
+        const char *labels[] = {
+            "center r<1.0", "mid r 1.0-2.0",
+            "edge r 2.0-3.0", "corner r>=3.0"};
+        regional_print("L2 distance from origin", dist, DIST_BINS, labels);
+    }
+    {
+        const char *labels[] = {
+            "|cos(2.5a)|<0.33  (flat)",
+            "|cos(2.5a)| 0.33-0.67",
+            "|cos(2.5a)|>=0.67 (steep)"};
+        regional_print("Gradient magnitude |df/da|", grad, GRAD_BINS, labels);
+    }
+    {
+        const char *labels[] = {
+            "|sin(2.5a)|<0.33  (linear)",
+            "|sin(2.5a)| 0.33-0.67",
+            "|sin(2.5a)|>=0.67 (curved)"};
+        regional_print("Curvature |d^2f/da^2|", curv, CURV_BINS, labels);
+    }
+    {
+        const char *labels[] = {
+            "Q1 a>=0,b>=0", "Q2 a<0,b>=0",
+            "Q3 a<0,b<0",   "Q4 a>=0,b<0"};
+        regional_print("Sign quadrant", quad, QUAD_BINS, labels);
+    }
+    {
+        const char *labels[] = {
+            "|target|<0.8", "|target| 0.8-1.6", "|target|>=1.6"};
+        regional_print("Target magnitude", tmag, TMAG_BINS, labels);
     }
 }
 
@@ -725,7 +1042,7 @@ static void evaluate_abs_error_stats(genann *ann, const NnTask *task,
     for (int i = 0; i < samples; ++i) {
         const double *xs = input + (size_t)i * task->inputs;
         const double *ts = target + (size_t)i * task->target_stride;
-        const double e = fabs(genann_run(ann, xs)[0] - ts[0]);
+        const double e = fabs(genann_run_ln(ann, xs)[0] - ts[0]);
         errs[i] = e;
         if (e > max_abs)
             max_abs = e;
@@ -754,9 +1071,9 @@ static void evaluate_recursive_two_step(genann *ann,
         const double *xs = input + (size_t)i * 2;
         const double *ts = target2 + (size_t)i * 2;
 
-        const double y0 = genann_run(ann, xs)[0];
+        const double y0 = genann_run_ln(ann, xs)[0];
         const double next_input[2] = { y0, xs[0] };
-        const double y1 = genann_run(ann, next_input)[0];
+        const double y1 = genann_run_ln(ann, next_input)[0];
 
         const double e0 = y0 - ts[0];
         const double e1 = y1 - ts[1];
@@ -788,7 +1105,8 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
     }
     configure_task_ann(template, task);
 
-    const int weights = template->total_weights;
+    const int n_reg = template->total_weights;
+    const int total_params = task_total_params(task, n_reg);
     genann_free(template);
     current_task = task;
 
@@ -796,8 +1114,8 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
     double best_loss = INFINITY;
     uint64_t best_seed = 0;
     long best_ms = 0;
-    double *best_weights = (double *)malloc((size_t)weights * sizeof(double));
-    double *run_weights = (double *)malloc((size_t)weights * sizeof(double));
+    double *best_weights = (double *)malloc((size_t)total_params * sizeof(double));
+    double *run_weights = (double *)malloc((size_t)total_params * sizeof(double));
     if (!best_weights || !run_weights) {
         fprintf(stderr, "allocation failed\n");
         free(best_weights);
@@ -809,9 +1127,10 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
         ? generations_override
         : task->generations;
 
-    printf("%s: inputs=%d hidden=%d outputs=%d weights=%d pop=%d->%d gens=%d runs=%d\n",
+    printf("%s: inputs=%d hidden=%d outputs=%d weights=%d(+%dLN) pop=%d->%d gens=%d runs=%d\n",
            task->name, task->inputs, task->hidden, task->outputs,
-           weights, task->popsize, task->min_popsize, generations, runs);
+           n_reg, total_params - n_reg,
+           task->popsize, task->min_popsize, generations, runs);
     printf("%-5s %14s %10s\n", "run", "loss", "ms");
 
     for (int r = 0; r < runs; ++r) {
@@ -819,7 +1138,7 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
         struct timespec t0, t1;
         clock_gettime(CLOCK_MONOTONIC, &t0);
 
-        const double loss = de_solve_lpsr_best(weights, task->popsize,
+        const double loss = de_solve_lpsr_best(total_params, task->popsize,
                                                task->min_popsize,
                                                generations,
                                                task->bounds_min,
@@ -833,7 +1152,7 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
             best_loss = loss;
             best_seed = seed;
             best_ms = ms;
-            memcpy(best_weights, run_weights, (size_t)weights * sizeof(double));
+            memcpy(best_weights, run_weights, (size_t)total_params * sizeof(double));
         }
         printf("%-5d %14.8g %10ld\n", r, loss, ms);
     }
@@ -851,7 +1170,26 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
         return 1;
     }
     configure_task_ann(ann, task);
-    memcpy(ann->weight, best_weights, (size_t)weights * sizeof(double));
+    memcpy(ann->weight, best_weights, (size_t)n_reg * sizeof(double));
+    if (task_uses_layernorm(task)) {
+        const int n_ln = task->hidden * task->hidden_layers;
+        double *ln_g = (double *)malloc((size_t)n_ln * sizeof(double));
+        double *ln_b = (double *)malloc((size_t)n_ln * sizeof(double));
+        if (!ln_g || !ln_b) {
+            fprintf(stderr, "LN alloc failed\n");
+            free(ln_g); free(ln_b);
+            genann_free(ann);
+            free(best_weights); free(run_weights);
+            return 1;
+        }
+        memcpy(ln_g, best_weights + n_reg, (size_t)n_ln * sizeof(double));
+        memcpy(ln_b, best_weights + n_reg + n_ln, (size_t)n_ln * sizeof(double));
+        thread_ln_gamma = ln_g;
+        thread_ln_beta = ln_b;
+        thread_ln_hidden = task->hidden_layers;
+    } else {
+        thread_ln_hidden = 0;
+    }
 
     /* header */
     printf("%-14s", "input");
@@ -866,7 +1204,7 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
     for (int i = 0; i < rows; ++i) {
         const double *input = task->input + (size_t)i * task->inputs;
         const double *target = task->target + (size_t)i * task->target_stride;
-        const double *output = genann_run(ann, input);
+        const double *output = genann_run_ln(ann, input);
         for (int j = 0; j < task->inputs; ++j)
             printf("% .6f%s", input[j], j == task->inputs - 1 ? "" : " ");
         for (int o = 0; o < task->outputs; ++o)
@@ -885,6 +1223,10 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
     double test_mse_by_output[8], test_mae_by_output[8];
     if (task->outputs > 8) {
         fprintf(stderr, "too many outputs for metric buffer\n");
+        if (task_uses_layernorm(task)) {
+            free(thread_ln_gamma);
+            free(thread_ln_beta);
+        }
         genann_free(ann);
         free(best_weights);
         free(run_weights);
@@ -941,8 +1283,15 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
                test_r_mse0, test_r_mae0);
         printf("recursive test  step1 MSE %.8g  MAE %.8g\n",
                test_r_mse1, test_r_mae1);
+
+        if (is_full_box_pair_task(task->name))
+            evaluate_regional_errors(ann);
     }
 
+    if (task_uses_layernorm(task)) {
+        free(thread_ln_gamma);
+        free(thread_ln_beta);
+    }
     genann_free(ann);
     free(best_weights);
     free(run_weights);
