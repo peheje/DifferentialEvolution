@@ -41,6 +41,18 @@ static double recurrence_5d_nonlin(const double *xs) {
          + 0.6 * xs[2] + 0.36 * xs[3] + 0.22 * xs[4];
 }
 
+/* Hard 5D regression: multi-sine + interaction term.
+   Tests whether DE/NN can handle genuine nonlinear coupling.
+   y = sin(2.5*x0) + 0.7*sin(1.7*x1) + 0.35*x2*x3
+     + 0.25*sin(x4 + x0) + 0.2*x2                              */
+static double recurrence_5d_hard(const double *xs) {
+    return sin(2.5 * xs[0])
+         + 0.7 * sin(1.7 * xs[1])
+         + 0.35 * xs[2] * xs[3]
+         + 0.25 * sin(xs[4] + xs[0])
+         + 0.2 * xs[2];
+}
+
 /* ── local activation variants ─────────────────────────────────── */
 static double act_tanh(const genann *ann, double a) {
     (void)ann;
@@ -121,6 +133,10 @@ static double PAIR5NL_TRAIN_INPUT[SEQ_TRAIN_SAMPLES * 5];
 static double PAIR5NL_TRAIN_TARGET[SEQ_TRAIN_SAMPLES];
 static double PAIR5NL_TEST_INPUT[SEQ_TEST_SAMPLES * 5];
 static double PAIR5NL_TEST_TARGET[SEQ_TEST_SAMPLES];
+static double PAIR5H_TRAIN_INPUT[SEQ_TRAIN_SAMPLES * 5];
+static double PAIR5H_TRAIN_TARGET[SEQ_TRAIN_SAMPLES];
+static double PAIR5H_TEST_INPUT[SEQ_TEST_SAMPLES * 5];
+static double PAIR5H_TEST_TARGET[SEQ_TEST_SAMPLES];
 static double PAIR2_TEST_INPUT [SEQ_TEST_SAMPLES * 2];
 static double PAIR2_TEST_TARGET[SEQ_TEST_SAMPLES * 2];
 static double PAIRMID1_TEST_INPUT [SEQ_TEST_SAMPLES * 2];
@@ -950,6 +966,54 @@ static const NnTask TASKS[] = {
         SEQ_TEST_SAMPLES, PAIR5_TEST_INPUT, PAIR5_TEST_TARGET,
     },
     {
+        "pair5-hard",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5H_TRAIN_INPUT, PAIR5H_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5H_TEST_INPUT, PAIR5H_TEST_TARGET,
+    },
+    {
+        "pair5-hard-basepbest10",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5H_TRAIN_INPUT, PAIR5H_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5H_TEST_INPUT, PAIR5H_TEST_TARGET,
+    },
+    {
+        "pair5-hard-basepbest20",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5H_TRAIN_INPUT, PAIR5H_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5H_TEST_INPUT, PAIR5H_TEST_TARGET,
+    },
+    {
+        "pair5-hard-basepbest50",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5H_TRAIN_INPUT, PAIR5H_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5H_TEST_INPUT, PAIR5H_TEST_TARGET,
+    },
+    {
         "pair10-huber0.5",
         10, 1, 24, 1,
         SEQ_TRAIN_SAMPLES,
@@ -1540,6 +1604,25 @@ static void init_generated_data(void) {
             for (int d = 0; d < 5; ++d)
                 xs[d] = local_rand_range(&s, -2.5, 2.5);
             PAIR5NL_TEST_TARGET[i] = recurrence_5d_nonlin(xs);
+        }
+    }
+    /* pair5-hard: multi-sine + interaction */
+    {
+        uint64_t s = 0x5A0E5EEDC0FFEEULL;
+        for (int i = 0; i < SEQ_TRAIN_SAMPLES; ++i) {
+            double *xs = PAIR5H_TRAIN_INPUT + (size_t)i * 5;
+            for (int d = 0; d < 5; ++d)
+                xs[d] = local_rand_range(&s, -2.5, 2.5);
+            PAIR5H_TRAIN_TARGET[i] = recurrence_5d_hard(xs);
+        }
+    }
+    {
+        uint64_t s = 0x5A0E7E57C0FFEEULL;
+        for (int i = 0; i < SEQ_TEST_SAMPLES; ++i) {
+            double *xs = PAIR5H_TEST_INPUT + (size_t)i * 5;
+            for (int d = 0; d < 5; ++d)
+                xs[d] = local_rand_range(&s, -2.5, 2.5);
+            PAIR5H_TEST_TARGET[i] = recurrence_5d_hard(xs);
         }
     }
     fill_random_pair_data(PAIRMID1_TRAIN_INPUT, PAIRMID1_TRAIN_TARGET,
