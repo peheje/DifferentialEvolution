@@ -50,34 +50,66 @@ static inline void de_pick3(uint64_t *state, int popsize, int i,
     do { *r2 = de_rand_int(state, popsize); } while (*r2 == i || *r2 == *r0 || *r2 == *r1);
 }
 
+typedef struct {
+    double score;
+    int index;
+} DeRank;
+
+static int de_rank_compare(const void *a, const void *b) {
+    const DeRank *ra = (const DeRank *)a;
+    const DeRank *rb = (const DeRank *)b;
+    return (ra->score > rb->score) - (ra->score < rb->score);
+}
+
+static inline int de_lpsr_population_size(int initial_popsize, int min_popsize,
+                                          int generations, int generation) {
+    if (min_popsize >= initial_popsize || generations <= 0)
+        return initial_popsize;
+
+    const double t = (double)(generation + 1) / (double)generations;
+    int next = (int)((double)initial_popsize
+        - (double)(initial_popsize - min_popsize) * t + 0.5);
+    if (next < min_popsize) next = min_popsize;
+    if (next > initial_popsize) next = initial_popsize;
+    return next;
+}
+
 /* ── DE/rand/1/bin with jDE ──────────────────────────────────────
    Returns the best objective value found. The population converges
    in-place; only the final best score is reported.               */
-static double de_solve(
+static double de_solve_impl(
     int      params,
-    int      popsize,
+    int      initial_popsize,
+    int      min_popsize,
     int      generations,
     double   bounds_min,
     double   bounds_max,
     double (*objective)(const double *xs, int n),
     uint64_t seed)
 {
-    if (params <= 0 || popsize < 4 || generations < 0 || !objective)
+    if (params <= 0 || initial_popsize < 4 || min_popsize < 4 ||
+        min_popsize > initial_popsize || generations < 0 || !objective)
         return INFINITY;
 
     const size_t agent_len = (size_t)params;
-    const size_t pop_len   = (size_t)popsize * agent_len;
+    const size_t capacity_len = (size_t)initial_popsize * agent_len;
     const int threads = omp_get_max_threads();
 
-    double *pop           = (double *)malloc(pop_len * sizeof(double));
-    double *prev_pop      = (double *)malloc(pop_len * sizeof(double));
+    double *pop           = (double *)malloc(capacity_len * sizeof(double));
+    double *prev_pop      = (double *)malloc(capacity_len * sizeof(double));
     double *trial_scratch = (double *)malloc((size_t)threads * agent_len * sizeof(double));
-    double *scores        = (double *)malloc((size_t)popsize * sizeof(double));
-    double *Fi            = (double *)malloc((size_t)popsize * sizeof(double));
-    double *CRi           = (double *)malloc((size_t)popsize * sizeof(double));
-    if (!pop || !prev_pop || !trial_scratch || !scores || !Fi || !CRi) {
+    double *scores        = (double *)malloc((size_t)initial_popsize * sizeof(double));
+    double *Fi            = (double *)malloc((size_t)initial_popsize * sizeof(double));
+    double *CRi           = (double *)malloc((size_t)initial_popsize * sizeof(double));
+    double *tmp_scores    = (double *)malloc((size_t)initial_popsize * sizeof(double));
+    double *tmp_Fi        = (double *)malloc((size_t)initial_popsize * sizeof(double));
+    double *tmp_CRi       = (double *)malloc((size_t)initial_popsize * sizeof(double));
+    DeRank *rank          = (DeRank *)malloc((size_t)initial_popsize * sizeof(DeRank));
+    if (!pop || !prev_pop || !trial_scratch || !scores || !Fi || !CRi ||
+        !tmp_scores || !tmp_Fi || !tmp_CRi || !rank) {
         free(pop); free(prev_pop); free(trial_scratch);
         free(scores); free(Fi); free(CRi);
+        free(tmp_scores); free(tmp_Fi); free(tmp_CRi); free(rank);
         return INFINITY;
     }
 
@@ -85,6 +117,7 @@ static double de_solve(
     if (!rng_states) {
         free(pop); free(prev_pop); free(trial_scratch);
         free(scores); free(Fi); free(CRi);
+        free(tmp_scores); free(tmp_Fi); free(tmp_CRi); free(rank);
         return INFINITY;
     }
     for (int t = 0; t < threads; ++t) {
@@ -93,7 +126,7 @@ static double de_solve(
     }
 
     /* ── initialise population ───────────────────────────────── */
-    for (int i = 0; i < popsize; ++i) {
+    for (int i = 0; i < initial_popsize; ++i) {
         double *agent = pop + (size_t)i * agent_len;
         for (int j = 0; j < params; ++j)
             agent[j] = de_rand_range(&rng_states[0], bounds_min, bounds_max);
@@ -102,20 +135,25 @@ static double de_solve(
         CRi[i] = de_rand01(&rng_states[0]);
     }
 
+    int active_popsize = initial_popsize;
+
     /* ── main loop ───────────────────────────────────────────── */
-#pragma omp parallel default(none) shared(params, agent_len, pop_len, pop, prev_pop, trial_scratch, scores, Fi, CRi, rng_states, popsize, generations, bounds_min, bounds_max, objective)
+#pragma omp parallel default(none) shared(params, agent_len, pop, prev_pop, trial_scratch, scores, Fi, CRi, tmp_scores, tmp_Fi, tmp_CRi, rank, rng_states, active_popsize, initial_popsize, min_popsize, generations, bounds_min, bounds_max, objective)
     {
         const int tid = omp_get_thread_num();
         uint64_t *state = &rng_states[tid];
         double *trial = trial_scratch + (size_t)tid * agent_len;
 
         for (int g = 0; g < generations; ++g) {
+            const int active = active_popsize;
+            const size_t active_len = (size_t)active * agent_len;
+
 #pragma omp for schedule(static)
-            for (size_t k = 0; k < pop_len; ++k)
+            for (size_t k = 0; k < active_len; ++k)
                 prev_pop[k] = pop[k];
 
 #pragma omp for schedule(static)
-            for (int i = 0; i < popsize; ++i) {
+            for (int i = 0; i < active; ++i) {
                 /* ── jDE: maybe re-sample F_i / CR_i ──────────── */
                 double Fi_try  = Fi[i];
                 double CRi_try = CRi[i];
@@ -126,7 +164,7 @@ static double de_solve(
 
                 /* ── DE/rand/1/bin ───────────────────────────── */
                 int i0, i1, i2;
-                de_pick3(state, popsize, i, &i0, &i1, &i2);
+                de_pick3(state, active, i, &i0, &i1, &i2);
 
                 const double *x0 = prev_pop + (size_t)i0 * agent_len;
                 const double *x1 = prev_pop + (size_t)i1 * agent_len;
@@ -150,11 +188,42 @@ static double de_solve(
                     CRi[i] = CRi_try;
                 }
             }
+
+#pragma omp single
+            {
+                const int next_active = de_lpsr_population_size(initial_popsize,
+                                                               min_popsize,
+                                                               generations,
+                                                               g);
+                if (next_active < active_popsize) {
+                    for (int i = 0; i < active_popsize; ++i) {
+                        rank[i].score = scores[i];
+                        rank[i].index = i;
+                    }
+                    qsort(rank, (size_t)active_popsize, sizeof(rank[0]), de_rank_compare);
+
+                    for (int i = 0; i < next_active; ++i) {
+                        const int old = rank[i].index;
+                        memcpy(prev_pop + (size_t)i * agent_len,
+                               pop + (size_t)old * agent_len,
+                               agent_len * sizeof(double));
+                        tmp_scores[i] = scores[old];
+                        tmp_Fi[i] = Fi[old];
+                        tmp_CRi[i] = CRi[old];
+                    }
+
+                    memcpy(pop, prev_pop, (size_t)next_active * agent_len * sizeof(double));
+                    memcpy(scores, tmp_scores, (size_t)next_active * sizeof(double));
+                    memcpy(Fi, tmp_Fi, (size_t)next_active * sizeof(double));
+                    memcpy(CRi, tmp_CRi, (size_t)next_active * sizeof(double));
+                    active_popsize = next_active;
+                }
+            }
         }
     }
 
     double best = scores[0];
-    for (int i = 1; i < popsize; ++i)
+    for (int i = 1; i < active_popsize; ++i)
         if (scores[i] < best) best = scores[i];
 
     free(rng_states);
@@ -164,7 +233,38 @@ static double de_solve(
     free(scores);
     free(Fi);
     free(CRi);
+    free(tmp_scores);
+    free(tmp_Fi);
+    free(tmp_CRi);
+    free(rank);
     return best;
+}
+
+static inline double de_solve(
+    int      params,
+    int      popsize,
+    int      generations,
+    double   bounds_min,
+    double   bounds_max,
+    double (*objective)(const double *xs, int n),
+    uint64_t seed)
+{
+    return de_solve_impl(params, popsize, popsize, generations,
+                         bounds_min, bounds_max, objective, seed);
+}
+
+static inline double de_solve_lpsr(
+    int      params,
+    int      initial_popsize,
+    int      min_popsize,
+    int      generations,
+    double   bounds_min,
+    double   bounds_max,
+    double (*objective)(const double *xs, int n),
+    uint64_t seed)
+{
+    return de_solve_impl(params, initial_popsize, min_popsize, generations,
+                         bounds_min, bounds_max, objective, seed);
 }
 
 #endif /* DE_SOLVER_H */

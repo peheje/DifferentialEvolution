@@ -24,6 +24,12 @@ typedef struct {
     double        success_threshold;
 } BenchCase;
 
+typedef struct {
+    const char *name;
+    int initial_popsize;
+    int min_popsize;
+} SolverCase;
+
 /* ── test functions ────────────────────────────────────────────── */
 static double sphere(const double *xs, int n) {
     double sum = 0.0;
@@ -95,43 +101,60 @@ int main(void) {
         {"griewank",   griewank,   200,  8000,  3, -600.0,   600.0,   1e-3},
     };
     const int case_count = (int)(sizeof(cases) / sizeof(cases[0]));
+    const SolverCase solvers[] = {
+        {"jde",     POPSIZE, POPSIZE},
+        {"lpsr128", POPSIZE, 128},
+        {"lpsr96",  POPSIZE, 96},
+        {"lpsr64",  POPSIZE, 64},
+        {"lpsr32",  POPSIZE, 32},
+    };
+    const int solver_count = (int)(sizeof(solvers) / sizeof(solvers[0]));
     const uint64_t base_seed = 0xD1FF3A9E2B1C4D77ULL;
 
-    printf("%-12s %6s %10s %5s %14s %10s %10s %10s %8s\n",
-           "objective", "dims", "generations", "runs",
+    printf("%-12s %-6s %6s %10s %5s %9s %14s %10s %10s %10s %8s\n",
+           "objective", "solver", "dims", "generations", "runs", "pop",
            "best_score", "best_ms", "median_ms", "worst_ms", "success");
 
     for (int c = 0; c < case_count; ++c) {
         const BenchCase *b = &cases[c];
-        double best_score = INFINITY;
-        long   times[16];
-        int    successes = 0;
+        for (int s = 0; s < solver_count; ++s) {
+            const SolverCase *solver = &solvers[s];
+            double best_score = INFINITY;
+            long   times[16];
+            int    successes = 0;
 
-        for (int r = 0; r < b->runs; ++r) {
-            const uint64_t seed = base_seed
-                + (uint64_t)c * 0x9e3779b97f4a7c15ULL
-                + (uint64_t)r * 0xbf58476d1ce4e5b9ULL;
+            for (int r = 0; r < b->runs; ++r) {
+                const uint64_t seed = base_seed
+                    + (uint64_t)c * 0x9e3779b97f4a7c15ULL
+                    + (uint64_t)r * 0xbf58476d1ce4e5b9ULL;
 
-            struct timespec t0, t1;
-            clock_gettime(CLOCK_MONOTONIC, &t0);
+                struct timespec t0, t1;
+                clock_gettime(CLOCK_MONOTONIC, &t0);
 
-            const double score = de_solve(b->params, POPSIZE, b->generations,
-                                          b->bounds_min, b->bounds_max,
-                                          b->objective, seed);
+                const double score = de_solve_lpsr(b->params,
+                                                   solver->initial_popsize,
+                                                   solver->min_popsize,
+                                                   b->generations,
+                                                   b->bounds_min,
+                                                   b->bounds_max,
+                                                   b->objective,
+                                                   seed);
 
-            clock_gettime(CLOCK_MONOTONIC, &t1);
+                clock_gettime(CLOCK_MONOTONIC, &t1);
 
-            if (score < best_score) best_score = score;
-            if (score <= b->success_threshold) successes++;
-            times[r] = elapsed_ms(t0, t1);
+                if (score < best_score) best_score = score;
+                if (score <= b->success_threshold) successes++;
+                times[r] = elapsed_ms(t0, t1);
+            }
+
+            qsort(times, (size_t)b->runs, sizeof(times[0]), compare_long);
+            printf("%-12s %-6s %6d %10d %5d %4d->%-4d %14.6g %10ld %10ld %10ld %3d/%-4d\n",
+                   b->name, solver->name, b->params, b->generations, b->runs,
+                   solver->initial_popsize, solver->min_popsize,
+                   best_score,
+                   times[0], times[b->runs / 2], times[b->runs - 1],
+                   successes, b->runs);
         }
-
-        qsort(times, (size_t)b->runs, sizeof(times[0]), compare_long);
-        printf("%-12s %6d %10d %5d %14.6g %10ld %10ld %10ld %3d/%-4d\n",
-               b->name, b->params, b->generations, b->runs,
-               best_score,
-               times[0], times[b->runs / 2], times[b->runs - 1],
-               successes, b->runs);
     }
 
     return 0;
