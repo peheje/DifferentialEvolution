@@ -117,6 +117,10 @@ int main(int argc, char **argv) {
         {"lpsr64",  POPSIZE, 64},
         {"lpsr32",  POPSIZE, 32},
         {"best1",   POPSIZE, POPSIZE},
+        {"pbest5",  POPSIZE, POPSIZE},
+        {"pbest10", POPSIZE, POPSIZE},
+        {"pbest20", POPSIZE, POPSIZE},
+        {"pbest50", POPSIZE, POPSIZE},
     };
     const int solver_count = (int)(sizeof(solvers) / sizeof(solvers[0]));
     const uint64_t base_seed = 0xD1FF3A9E2B1C4D77ULL;
@@ -141,7 +145,8 @@ int main(int argc, char **argv) {
                 struct timespec t0, t1;
                 clock_gettime(CLOCK_MONOTONIC, &t0);
 
-                const int use_best1 = strstr(solver->name, "best1") != NULL;
+                const char *pbest = strstr(solver->name, "pbest");
+                const int use_best1 = strcmp(solver->name, "best1") == 0;
                 const double score = use_best1
                     ? de_solve_lpsr_best1(b->params,
                                           solver->initial_popsize,
@@ -151,6 +156,16 @@ int main(int argc, char **argv) {
                                           b->bounds_max,
                                           b->objective,
                                           seed, NULL)
+                    : pbest
+                    ? de_solve_lpsr_pbest(b->params,
+                                          solver->initial_popsize,
+                                          solver->min_popsize,
+                                          b->generations,
+                                          b->bounds_min,
+                                          b->bounds_max,
+                                          b->objective,
+                                          seed, NULL,
+                                          atoi(pbest + 5))
                     : de_solve_lpsr(b->params,
                                     solver->initial_popsize,
                                     solver->min_popsize,

@@ -650,6 +650,54 @@ static const NnTask TASKS[] = {
         SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
     },
     {
+        "pair1-pbest5",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-pbest10",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-pbest20",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-pbest50",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
         "pair1-huber0.5-best1",
         2, 1, 12, 1,
         SEQ_TRAIN_SAMPLES,
@@ -747,6 +795,54 @@ static const NnTask TASKS[] = {
     },
     {
         "pair5-huber0.5-best1",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5_TRAIN_INPUT, PAIR5_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5_TEST_INPUT, PAIR5_TEST_TARGET,
+    },
+    {
+        "pair5-huber0.5-pbest5",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5_TRAIN_INPUT, PAIR5_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5_TEST_INPUT, PAIR5_TEST_TARGET,
+    },
+    {
+        "pair5-huber0.5-pbest10",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5_TRAIN_INPUT, PAIR5_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5_TEST_INPUT, PAIR5_TEST_TARGET,
+    },
+    {
+        "pair5-huber0.5-pbest20",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5_TRAIN_INPUT, PAIR5_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5_TEST_INPUT, PAIR5_TEST_TARGET,
+    },
+    {
+        "pair5-huber0.5-pbest50",
         5, 1, 16, 1,
         SEQ_TRAIN_SAMPLES,
         768, 384, 12000,
@@ -1046,10 +1142,19 @@ static double task_huber_delta(const NnTask *task) {
 }
 
 static int task_mutation_strategy(const NnTask *task) {
+    if (strstr(task->name, "-pbest"))      return 4;
     if (strstr(task->name, "-anneal"))     return 3;
     if (strstr(task->name, "-curtobest1")) return 2;
     if (strstr(task->name, "-best1"))      return 1;
     return 0;
+}
+
+static int task_pbest_percent(const NnTask *task) {
+    const char *p = strstr(task->name, "-pbest");
+    if (!p)
+        return 0;
+    const int percent = atoi(p + 6);
+    return percent > 0 ? percent : 10;
 }
 
 static int is_full_box_pair_task(const char *name) {
@@ -1699,7 +1804,13 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
 
         double loss;
         const int strategy = task_mutation_strategy(task);
-        if (strategy == 3)
+        if (strategy == 4)
+            loss = de_solve_lpsr_pbest(total_params, task->popsize,
+                                  task->min_popsize, generations,
+                                  task->bounds_min, task->bounds_max,
+                                  task_loss, seed, run_weights,
+                                  task_pbest_percent(task));
+        else if (strategy == 3)
             loss = de_solve_lpsr_anneal(total_params, task->popsize,
                                   task->min_popsize, generations,
                                   task->bounds_min, task->bounds_max,
@@ -1983,7 +2094,7 @@ static int run_curriculum(int generations_per_stage, int first_stage) {
                                             stages[s]->bounds_max,
                                             task_loss,
                                             seed + (uint64_t)s * 0x9e3779b97f4a7c15ULL,
-                                            best_weights, 0);
+                                            best_weights, 0, 0);
         clock_gettime(CLOCK_MONOTONIC, &t1);
         printf("stage %-10s loss %.8g ms %ld active_pop=%d\n",
                stages[s]->name, loss, elapsed_ms(t0, t1), state.active_popsize);

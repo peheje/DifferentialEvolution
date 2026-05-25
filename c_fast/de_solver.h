@@ -190,7 +190,8 @@ static double de_state_evolve(
     double (*objective)(const double *xs, int n),
     uint64_t seed,
     double  *best_out,
-    int      mutation_strategy)
+    int      mutation_strategy,
+    int      pbest_percent)
 {
     if (!de_state || de_state->params <= 0 || de_state->active_popsize < 4 ||
         min_popsize < 4 || min_popsize > de_state->active_popsize ||
@@ -208,9 +209,11 @@ static double de_state_evolve(
     double *tmp_scores    = use_lpsr ? (double *)malloc((size_t)initial_popsize * sizeof(double)) : NULL;
     double *tmp_Fi        = use_lpsr ? (double *)malloc((size_t)initial_popsize * sizeof(double)) : NULL;
     double *tmp_CRi       = use_lpsr ? (double *)malloc((size_t)initial_popsize * sizeof(double)) : NULL;
-    DeRank *rank          = use_lpsr ? (DeRank *)malloc((size_t)initial_popsize * sizeof(DeRank)) : NULL;
+    const int use_rank = use_lpsr || mutation_strategy == 4;
+    DeRank *rank          = use_rank ? (DeRank *)malloc((size_t)initial_popsize * sizeof(DeRank)) : NULL;
     if (!prev_pop || !trial_scratch ||
-        (use_lpsr && (!tmp_scores || !tmp_Fi || !tmp_CRi || !rank))) {
+        ((use_lpsr && (!tmp_scores || !tmp_Fi || !tmp_CRi)) ||
+         (use_rank && !rank))) {
         free(prev_pop); free(trial_scratch);
         free(tmp_scores); free(tmp_Fi); free(tmp_CRi); free(rank);
         return INFINITY;
@@ -235,7 +238,7 @@ static double de_state_evolve(
 
     /* ── main loop ───────────────────────────────────────────── */
     int best_idx = 0;
-#pragma omp parallel default(none) shared(params, agent_len, pop, prev_pop, trial_scratch, scores, Fi, CRi, tmp_scores, tmp_Fi, tmp_CRi, rank, rng_states, active_popsize, initial_popsize, min_popsize, use_lpsr, generations, bounds_min, bounds_max, objective, best_idx, mutation_strategy)
+#pragma omp parallel default(none) shared(params, agent_len, pop, prev_pop, trial_scratch, scores, Fi, CRi, tmp_scores, tmp_Fi, tmp_CRi, rank, rng_states, active_popsize, initial_popsize, min_popsize, use_lpsr, generations, bounds_min, bounds_max, objective, best_idx, mutation_strategy, pbest_percent)
     {
         const int tid = omp_get_thread_num();
         uint64_t *state = &rng_states[tid];
@@ -259,6 +262,13 @@ static double de_state_evolve(
                             best = scores[i];
                             best_idx = i;
                         }
+                    }
+                    if (mutation_strategy == 4) {
+                        for (int i = 0; i < active; ++i) {
+                            rank[i].score = scores[i];
+                            rank[i].index = i;
+                        }
+                        qsort(rank, (size_t)active, sizeof(rank[0]), de_rank_compare);
                     }
                 }
             }
@@ -329,6 +339,28 @@ static double de_state_evolve(
                         }
                         continue;
                     }
+                } else if (mutation_strategy == 4) {
+                    /* ── DE/current-to-pbest/1/bin ───────────
+                       JADE-style p-best without external archive. */
+                    int pbest_count = (active * pbest_percent + 99) / 100;
+                    if (pbest_count < 1)
+                        pbest_count = 1;
+                    if (pbest_count > active)
+                        pbest_count = active;
+
+                    int pbest_idx = rank[de_rand_int(state, pbest_count)].index;
+                    if (pbest_count > 1) {
+                        int guard = 0;
+                        while (pbest_idx == i && guard++ < 8)
+                            pbest_idx = rank[de_rand_int(state, pbest_count)].index;
+                    }
+
+                    int i1, i2;
+                    de_pick2_excluding(state, active, i, pbest_idx, &i1, &i2);
+                    x0 = prev_pop + (size_t)pbest_idx * agent_len;
+                    x1 = prev_pop + (size_t)i1        * agent_len;
+                    x2 = prev_pop + (size_t)i2        * agent_len;
+                    is_curtobest = 1;
                 } else {
                     /* ── DE/rand/1/bin ────────────────────── */
                     int i0, i1, i2;
@@ -425,7 +457,8 @@ static double de_solve_impl(
     double (*objective)(const double *xs, int n),
     uint64_t seed,
     double  *best_out,
-    int      mutation_strategy)
+    int      mutation_strategy,
+    int      pbest_percent)
 {
     if (params <= 0 || initial_popsize < 4 || min_popsize < 4 ||
         min_popsize > initial_popsize || generations < 0 || !objective)
@@ -438,7 +471,8 @@ static double de_solve_impl(
     de_state_init_random(&state, bounds_min, bounds_max, objective, seed);
     const double best = de_state_evolve(&state, min_popsize, generations,
                                         bounds_min, bounds_max, objective,
-                                        seed, best_out, mutation_strategy);
+                                        seed, best_out, mutation_strategy,
+                                        pbest_percent);
     de_state_free(&state);
     return best;
 }
@@ -453,7 +487,7 @@ static inline double de_solve(
     uint64_t seed)
 {
     return de_solve_impl(params, popsize, popsize, generations,
-                         bounds_min, bounds_max, objective, seed, NULL, 0);
+                         bounds_min, bounds_max, objective, seed, NULL, 0, 0);
 }
 
 static inline double de_solve_lpsr(
@@ -467,7 +501,7 @@ static inline double de_solve_lpsr(
     uint64_t seed)
 {
     return de_solve_impl(params, initial_popsize, min_popsize, generations,
-                         bounds_min, bounds_max, objective, seed, NULL, 0);
+                         bounds_min, bounds_max, objective, seed, NULL, 0, 0);
 }
 
 static inline double de_solve_lpsr_best(
@@ -482,7 +516,7 @@ static inline double de_solve_lpsr_best(
     double  *best_out)
 {
     return de_solve_impl(params, initial_popsize, min_popsize, generations,
-                         bounds_min, bounds_max, objective, seed, best_out, 0);
+                         bounds_min, bounds_max, objective, seed, best_out, 0, 0);
 }
 
 static inline double de_solve_lpsr_best1(
@@ -497,7 +531,7 @@ static inline double de_solve_lpsr_best1(
     double  *best_out)
 {
     return de_solve_impl(params, initial_popsize, min_popsize, generations,
-                         bounds_min, bounds_max, objective, seed, best_out, 1);
+                         bounds_min, bounds_max, objective, seed, best_out, 1, 0);
 }
 
 static inline double de_solve_lpsr_curtobest1(
@@ -512,7 +546,7 @@ static inline double de_solve_lpsr_curtobest1(
     double  *best_out)
 {
     return de_solve_impl(params, initial_popsize, min_popsize, generations,
-                         bounds_min, bounds_max, objective, seed, best_out, 2);
+                         bounds_min, bounds_max, objective, seed, best_out, 2, 0);
 }
 
 static inline double de_solve_lpsr_anneal(
@@ -527,7 +561,28 @@ static inline double de_solve_lpsr_anneal(
     double  *best_out)
 {
     return de_solve_impl(params, initial_popsize, min_popsize, generations,
-                         bounds_min, bounds_max, objective, seed, best_out, 3);
+                         bounds_min, bounds_max, objective, seed, best_out, 3, 0);
+}
+
+static inline double de_solve_lpsr_pbest(
+    int      params,
+    int      initial_popsize,
+    int      min_popsize,
+    int      generations,
+    double   bounds_min,
+    double   bounds_max,
+    double (*objective)(const double *xs, int n),
+    uint64_t seed,
+    double  *best_out,
+    int      pbest_percent)
+{
+    if (pbest_percent < 1)
+        pbest_percent = 1;
+    if (pbest_percent > 100)
+        pbest_percent = 100;
+    return de_solve_impl(params, initial_popsize, min_popsize, generations,
+                         bounds_min, bounds_max, objective, seed, best_out, 4,
+                         pbest_percent);
 }
 
 #endif /* DE_SOLVER_H */
