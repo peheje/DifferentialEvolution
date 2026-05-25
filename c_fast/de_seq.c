@@ -520,6 +520,114 @@ static const NnTask TASKS[] = {
         PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
         SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
     },
+    {
+        "pair1-huber0.5-relu",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-huber0.5-scale-relu",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR_SCALED_TRAIN_INPUT, PAIR1_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR_SCALED_TEST_INPUT, PAIR1_TEST_TARGET,
+    },
+    {
+        "pair1-huber0.5-scale-gelu",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR_SCALED_TRAIN_INPUT, PAIR1_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR_SCALED_TEST_INPUT, PAIR1_TEST_TARGET,
+    },
+    {
+        "pair1-huber0.5-scale-silu",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR_SCALED_TRAIN_INPUT, PAIR1_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR_SCALED_TEST_INPUT, PAIR1_TEST_TARGET,
+    },
+    {
+        "pair1-huber0.5-ln-tanh",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-huber0.5-silu-b10",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -10.0, 10.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-huber0.5-gelu-b10",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -10.0, 10.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-best1",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-huber0.5-best1",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
 };
 
 /* ── thread-local genann cache ──────────────────────────────────── */
@@ -682,6 +790,10 @@ static double task_huber_delta(const NnTask *task) {
     const char *p = strstr(task->name, "huber");
     if (!p) return -1.0;
     return atof(p + 5);
+}
+
+static int task_uses_best1(const NnTask *task) {
+    return strstr(task->name, "-best1") != NULL;
 }
 
 static int is_full_box_pair_task(const char *name) {
@@ -1249,13 +1361,15 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
         struct timespec t0, t1;
         clock_gettime(CLOCK_MONOTONIC, &t0);
 
-        const double loss = de_solve_lpsr_best(total_params, task->popsize,
-                                               task->min_popsize,
-                                               generations,
-                                               task->bounds_min,
-                                               task->bounds_max,
-                                               task_loss, seed,
-                                               run_weights);
+        const double loss = task_uses_best1(task)
+            ? de_solve_lpsr_best1(total_params, task->popsize,
+                                  task->min_popsize, generations,
+                                  task->bounds_min, task->bounds_max,
+                                  task_loss, seed, run_weights)
+            : de_solve_lpsr_best(total_params, task->popsize,
+                                 task->min_popsize, generations,
+                                 task->bounds_min, task->bounds_max,
+                                 task_loss, seed, run_weights);
 
         clock_gettime(CLOCK_MONOTONIC, &t1);
         const long ms = elapsed_ms(t0, t1);
@@ -1514,7 +1628,7 @@ static int run_curriculum(int generations_per_stage, int first_stage) {
                                             stages[s]->bounds_max,
                                             task_loss,
                                             seed + (uint64_t)s * 0x9e3779b97f4a7c15ULL,
-                                            best_weights);
+                                            best_weights, 0);
         clock_gettime(CLOCK_MONOTONIC, &t1);
         printf("stage %-10s loss %.8g ms %ld active_pop=%d\n",
                stages[s]->name, loss, elapsed_ms(t0, t1), state.active_popsize);

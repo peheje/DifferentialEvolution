@@ -43,6 +43,12 @@ static inline double de_clamp(double x, double lo, double hi) {
     return x < lo ? lo : (x > hi ? hi : x);
 }
 
+static inline void de_pick2_excluding(uint64_t *state, int popsize, int i, int excl,
+                                       int *r0, int *r1) {
+    do { *r0 = de_rand_int(state, popsize); } while (*r0 == i || *r0 == excl);
+    do { *r1 = de_rand_int(state, popsize); } while (*r1 == i || *r1 == excl || *r1 == *r0);
+}
+
 static inline void de_pick3(uint64_t *state, int popsize, int i,
                             int *r0, int *r1, int *r2) {
     do { *r0 = de_rand_int(state, popsize); } while (*r0 == i);
@@ -177,7 +183,8 @@ static double de_state_evolve(
     double   bounds_max,
     double (*objective)(const double *xs, int n),
     uint64_t seed,
-    double  *best_out)
+    double  *best_out,
+    int      use_best1)
 {
     if (!de_state || de_state->params <= 0 || de_state->active_popsize < 4 ||
         min_popsize < 4 || min_popsize > de_state->active_popsize ||
@@ -221,7 +228,8 @@ static double de_state_evolve(
     double *CRi = de_state->CRi;
 
     /* ── main loop ───────────────────────────────────────────── */
-#pragma omp parallel default(none) shared(params, agent_len, pop, prev_pop, trial_scratch, scores, Fi, CRi, tmp_scores, tmp_Fi, tmp_CRi, rank, rng_states, active_popsize, initial_popsize, min_popsize, use_lpsr, generations, bounds_min, bounds_max, objective)
+    int best_idx = 0;
+#pragma omp parallel default(none) shared(params, agent_len, pop, prev_pop, trial_scratch, scores, Fi, CRi, tmp_scores, tmp_Fi, tmp_CRi, rank, rng_states, active_popsize, initial_popsize, min_popsize, use_lpsr, generations, bounds_min, bounds_max, objective, best_idx, use_best1)
     {
         const int tid = omp_get_thread_num();
         uint64_t *state = &rng_states[tid];
@@ -235,6 +243,20 @@ static double de_state_evolve(
             for (size_t k = 0; k < active_len; ++k)
                 prev_pop[k] = pop[k];
 
+            if (use_best1) {
+#pragma omp single
+                {
+                    best_idx = 0;
+                    double best = scores[0];
+                    for (int i = 1; i < active; ++i) {
+                        if (scores[i] < best) {
+                            best = scores[i];
+                            best_idx = i;
+                        }
+                    }
+                }
+            }
+
 #pragma omp for schedule(static)
             for (int i = 0; i < active; ++i) {
                 /* ── jDE: maybe re-sample F_i / CR_i ──────────── */
@@ -245,15 +267,25 @@ static double de_state_evolve(
                 if (de_rand01(state) < JDE_TAU_CR)
                     CRi_try = de_rand01(state);
 
-                /* ── DE/rand/1/bin ───────────────────────────── */
-                int i0, i1, i2;
-                de_pick3(state, active, i, &i0, &i1, &i2);
-
-                const double *x0 = prev_pop + (size_t)i0 * agent_len;
-                const double *x1 = prev_pop + (size_t)i1 * agent_len;
-                const double *x2 = prev_pop + (size_t)i2 * agent_len;
+                const double *x0, *x1, *x2;
                 const double *xt_prev = prev_pop + (size_t)i * agent_len;
                 double *xt       = pop + (size_t)i  * agent_len;
+
+                if (use_best1) {
+                    /* ── DE/best/1/bin ────────────────────── */
+                    int i1, i2;
+                    de_pick2_excluding(state, active, i, best_idx, &i1, &i2);
+                    x0 = prev_pop + (size_t)best_idx * agent_len;
+                    x1 = prev_pop + (size_t)i1      * agent_len;
+                    x2 = prev_pop + (size_t)i2      * agent_len;
+                } else {
+                    /* ── DE/rand/1/bin ────────────────────── */
+                    int i0, i1, i2;
+                    de_pick3(state, active, i, &i0, &i1, &i2);
+                    x0 = prev_pop + (size_t)i0 * agent_len;
+                    x1 = prev_pop + (size_t)i1 * agent_len;
+                    x2 = prev_pop + (size_t)i2 * agent_len;
+                }
 
                 for (int j = 0; j < params; ++j) {
                     if (de_rand01(state) < CRi_try)
@@ -332,7 +364,8 @@ static double de_solve_impl(
     double   bounds_max,
     double (*objective)(const double *xs, int n),
     uint64_t seed,
-    double  *best_out)
+    double  *best_out,
+    int      use_best1)
 {
     if (params <= 0 || initial_popsize < 4 || min_popsize < 4 ||
         min_popsize > initial_popsize || generations < 0 || !objective)
@@ -345,7 +378,7 @@ static double de_solve_impl(
     de_state_init_random(&state, bounds_min, bounds_max, objective, seed);
     const double best = de_state_evolve(&state, min_popsize, generations,
                                         bounds_min, bounds_max, objective,
-                                        seed, best_out);
+                                        seed, best_out, use_best1);
     de_state_free(&state);
     return best;
 }
@@ -360,7 +393,7 @@ static inline double de_solve(
     uint64_t seed)
 {
     return de_solve_impl(params, popsize, popsize, generations,
-                         bounds_min, bounds_max, objective, seed, NULL);
+                         bounds_min, bounds_max, objective, seed, NULL, 0);
 }
 
 static inline double de_solve_lpsr(
@@ -374,7 +407,7 @@ static inline double de_solve_lpsr(
     uint64_t seed)
 {
     return de_solve_impl(params, initial_popsize, min_popsize, generations,
-                         bounds_min, bounds_max, objective, seed, NULL);
+                         bounds_min, bounds_max, objective, seed, NULL, 0);
 }
 
 static inline double de_solve_lpsr_best(
@@ -389,7 +422,22 @@ static inline double de_solve_lpsr_best(
     double  *best_out)
 {
     return de_solve_impl(params, initial_popsize, min_popsize, generations,
-                         bounds_min, bounds_max, objective, seed, best_out);
+                         bounds_min, bounds_max, objective, seed, best_out, 0);
+}
+
+static inline double de_solve_lpsr_best1(
+    int      params,
+    int      initial_popsize,
+    int      min_popsize,
+    int      generations,
+    double   bounds_min,
+    double   bounds_max,
+    double (*objective)(const double *xs, int n),
+    uint64_t seed,
+    double  *best_out)
+{
+    return de_solve_impl(params, initial_popsize, min_popsize, generations,
+                         bounds_min, bounds_max, objective, seed, best_out, 1);
 }
 
 #endif /* DE_SOLVER_H */
