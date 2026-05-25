@@ -472,6 +472,54 @@ static const NnTask TASKS[] = {
         PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
         SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
     },
+    {
+        "pair1-huber0.2",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-huber0.5",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-huber1.0",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-huber0.5-dw1",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
 };
 
 /* ── thread-local genann cache ──────────────────────────────────── */
@@ -630,6 +678,12 @@ static double task_distance_weight_strength(const NnTask *task) {
     return atof(p + 3);
 }
 
+static double task_huber_delta(const NnTask *task) {
+    const char *p = strstr(task->name, "huber");
+    if (!p) return -1.0;
+    return atof(p + 5);
+}
+
 static int is_full_box_pair_task(const char *name) {
     if (strncmp(name, "pair1", 5) != 0) return 0;
     if (strstr(name, "mid")) return 0;
@@ -658,6 +712,7 @@ static double task_loss(const double *weights, int n) {
     }
 
     const double dw_strength = task_distance_weight_strength(task);
+    const double huber_delta = task_huber_delta(task);
     const double r_max = 2.5 * 1.41421356237; /* sqrt(2) * 2.5 */
     double loss = 0.0;
     double max_sq = 0.0;
@@ -690,6 +745,13 @@ static double task_loss(const double *weights, int n) {
             if (task_uses_max_loss(task)) {
                 if (sq > max_sq)
                     max_sq = sq;
+            } else if (huber_delta > 0.0) {
+                const double ae = fabs(e);
+                if (ae <= huber_delta)
+                    loss += sw * w * 0.5 * e * e;
+                else
+                    loss += sw * w * huber_delta * (ae - 0.5 * huber_delta);
+                total_weight += sw * w;
             } else if (task_uses_mae_loss(task)) {
                 loss += sw * w * fabs(e);
                 total_weight += sw * w;
