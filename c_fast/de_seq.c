@@ -436,6 +436,42 @@ static const NnTask TASKS[] = {
         PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
         SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
     },
+    {
+        "pair1-dw1",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-dw2",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-dw4",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
 };
 
 /* ── thread-local genann cache ──────────────────────────────────── */
@@ -588,6 +624,12 @@ static int task_uses_max_loss(const NnTask *task) {
     return strstr(task->name, "-max") != NULL;
 }
 
+static double task_distance_weight_strength(const NnTask *task) {
+    const char *p = strstr(task->name, "-dw");
+    if (!p) return 0.0;
+    return atof(p + 3);
+}
+
 static int is_full_box_pair_task(const char *name) {
     if (strncmp(name, "pair1", 5) != 0) return 0;
     if (strstr(name, "mid")) return 0;
@@ -615,11 +657,19 @@ static double task_loss(const double *weights, int n) {
                (size_t)n_ln * sizeof(double));
     }
 
+    const double dw_strength = task_distance_weight_strength(task);
+    const double r_max = 2.5 * 1.41421356237; /* sqrt(2) * 2.5 */
     double loss = 0.0;
     double max_sq = 0.0;
+    double total_weight = 0.0;
     for (int i = 0; i < task->samples; ++i) {
         const double *input  = task->input + (size_t)i * task->inputs;
         const double *target = task->target + (size_t)i * task->target_stride;
+
+        const double sw = dw_strength > 0.0
+            ? 1.0 + dw_strength * (sqrt(input[0] * input[0]
+                                      + input[1] * input[1]) / r_max)
+            : 1.0;
 
         if (task->rollout_loss_weight > 0.0) {
             const double y0 = genann_run_ln(ann, input)[0];
@@ -627,7 +677,8 @@ static double task_loss(const double *weights, int n) {
             const double y1 = genann_run_ln(ann, next_input)[0];
             const double e0 = y0 - target[0];
             const double e1 = y1 - target[1];
-            loss += e0 * e0 + task->rollout_loss_weight * e1 * e1;
+            loss += sw * (e0 * e0 + task->rollout_loss_weight * e1 * e1);
+            total_weight += sw * (1.0 + task->rollout_loss_weight);
             continue;
         }
 
@@ -640,19 +691,17 @@ static double task_loss(const double *weights, int n) {
                 if (sq > max_sq)
                     max_sq = sq;
             } else if (task_uses_mae_loss(task)) {
-                loss += w * fabs(e);
+                loss += sw * w * fabs(e);
+                total_weight += sw * w;
             } else {
-                loss += w * sq;
+                loss += sw * w * sq;
+                total_weight += sw * w;
             }
         }
     }
     if (task_uses_max_loss(task))
         return max_sq;
-    const double denom = task->rollout_loss_weight > 0.0
-        ? (double)task->samples * (1.0 + task->rollout_loss_weight)
-        : (double)task->samples
-            * (1.0 + (double)(task->outputs - 1) * task->aux_loss_weight);
-    return loss / denom;
+    return total_weight > 0.0 ? loss / total_weight : loss;
 }
 
 /* ── helpers ────────────────────────────────────────────────────── */
