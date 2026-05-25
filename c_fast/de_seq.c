@@ -698,6 +698,54 @@ static const NnTask TASKS[] = {
         SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
     },
     {
+        "pair1-basepbest5",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-basepbest10",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-basepbest20",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
+        "pair1-basepbest50",
+        2, 1, 12, 1,
+        SEQ_TRAIN_SAMPLES,
+        384, 192, 6000,
+        2,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR2_TRAIN_INPUT, PAIR2_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR2_TEST_INPUT, PAIR2_TEST_TARGET,
+    },
+    {
         "pair1-huber0.5-best1",
         2, 1, 12, 1,
         SEQ_TRAIN_SAMPLES,
@@ -843,6 +891,54 @@ static const NnTask TASKS[] = {
     },
     {
         "pair5-huber0.5-pbest50",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5_TRAIN_INPUT, PAIR5_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5_TEST_INPUT, PAIR5_TEST_TARGET,
+    },
+    {
+        "pair5-huber0.5-basepbest5",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5_TRAIN_INPUT, PAIR5_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5_TEST_INPUT, PAIR5_TEST_TARGET,
+    },
+    {
+        "pair5-huber0.5-basepbest10",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5_TRAIN_INPUT, PAIR5_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5_TEST_INPUT, PAIR5_TEST_TARGET,
+    },
+    {
+        "pair5-huber0.5-basepbest20",
+        5, 1, 16, 1,
+        SEQ_TRAIN_SAMPLES,
+        768, 384, 12000,
+        1,
+        1.0,
+        0.0,
+        -5.0, 5.0, 1e-4,
+        PAIR5_TRAIN_INPUT, PAIR5_TRAIN_TARGET,
+        SEQ_TEST_SAMPLES, PAIR5_TEST_INPUT, PAIR5_TEST_TARGET,
+    },
+    {
+        "pair5-huber0.5-basepbest50",
         5, 1, 16, 1,
         SEQ_TRAIN_SAMPLES,
         768, 384, 12000,
@@ -1142,6 +1238,7 @@ static double task_huber_delta(const NnTask *task) {
 }
 
 static int task_mutation_strategy(const NnTask *task) {
+    if (strstr(task->name, "-basepbest"))  return 5;
     if (strstr(task->name, "-pbest"))      return 4;
     if (strstr(task->name, "-anneal"))     return 3;
     if (strstr(task->name, "-curtobest1")) return 2;
@@ -1150,10 +1247,15 @@ static int task_mutation_strategy(const NnTask *task) {
 }
 
 static int task_pbest_percent(const NnTask *task) {
-    const char *p = strstr(task->name, "-pbest");
+    const char *p = strstr(task->name, "-basepbest");
+    int offset = 10;
+    if (!p) {
+        p = strstr(task->name, "-pbest");
+        offset = 6;
+    }
     if (!p)
         return 0;
-    const int percent = atoi(p + 6);
+    const int percent = atoi(p + offset);
     return percent > 0 ? percent : 10;
 }
 
@@ -1804,7 +1906,13 @@ static int run_task(const NnTask *task, int runs, int generations_override) {
 
         double loss;
         const int strategy = task_mutation_strategy(task);
-        if (strategy == 4)
+        if (strategy == 5)
+            loss = de_solve_lpsr_basepbest(total_params, task->popsize,
+                                  task->min_popsize, generations,
+                                  task->bounds_min, task->bounds_max,
+                                  task_loss, seed, run_weights,
+                                  task_pbest_percent(task));
+        else if (strategy == 4)
             loss = de_solve_lpsr_pbest(total_params, task->popsize,
                                   task->min_popsize, generations,
                                   task->bounds_min, task->bounds_max,

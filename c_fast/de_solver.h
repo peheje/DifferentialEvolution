@@ -339,9 +339,9 @@ static double de_state_evolve(
                         }
                         continue;
                     }
-                } else if (mutation_strategy == 4) {
-                    /* ── DE/current-to-pbest/1/bin ───────────
-                       JADE-style p-best without external archive. */
+                } else if (mutation_strategy == 4 || mutation_strategy == 5) {
+                    /* ── DE/current-to-pbest/1/bin or DE/pbest/1/bin ──
+                       p-best without external archive. */
                     int pbest_count = (active * pbest_percent + 99) / 100;
                     if (pbest_count < 1)
                         pbest_count = 1;
@@ -360,7 +360,7 @@ static double de_state_evolve(
                     x0 = prev_pop + (size_t)pbest_idx * agent_len;
                     x1 = prev_pop + (size_t)i1        * agent_len;
                     x2 = prev_pop + (size_t)i2        * agent_len;
-                    is_curtobest = 1;
+                    is_curtobest = mutation_strategy == 4;
                 } else {
                     /* ── DE/rand/1/bin ────────────────────── */
                     int i0, i1, i2;
@@ -582,6 +582,27 @@ static inline double de_solve_lpsr_pbest(
         pbest_percent = 100;
     return de_solve_impl(params, initial_popsize, min_popsize, generations,
                          bounds_min, bounds_max, objective, seed, best_out, 4,
+                         pbest_percent);
+}
+
+static inline double de_solve_lpsr_basepbest(
+    int      params,
+    int      initial_popsize,
+    int      min_popsize,
+    int      generations,
+    double   bounds_min,
+    double   bounds_max,
+    double (*objective)(const double *xs, int n),
+    uint64_t seed,
+    double  *best_out,
+    int      pbest_percent)
+{
+    if (pbest_percent < 1)
+        pbest_percent = 1;
+    if (pbest_percent > 100)
+        pbest_percent = 100;
+    return de_solve_impl(params, initial_popsize, min_popsize, generations,
+                         bounds_min, bounds_max, objective, seed, best_out, 5,
                          pbest_percent);
 }
 
