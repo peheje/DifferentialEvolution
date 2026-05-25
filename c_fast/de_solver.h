@@ -55,10 +55,105 @@ typedef struct {
     int index;
 } DeRank;
 
+typedef struct {
+    int params;
+    int capacity_popsize;
+    int active_popsize;
+    double *pop;
+    double *scores;
+    double *Fi;
+    double *CRi;
+} DeState;
+
 static int de_rank_compare(const void *a, const void *b) {
     const DeRank *ra = (const DeRank *)a;
     const DeRank *rb = (const DeRank *)b;
     return (ra->score > rb->score) - (ra->score < rb->score);
+}
+
+static void de_state_free(DeState *state) {
+    if (!state)
+        return;
+    free(state->pop);
+    free(state->scores);
+    free(state->Fi);
+    free(state->CRi);
+    state->params = 0;
+    state->capacity_popsize = 0;
+    state->active_popsize = 0;
+    state->pop = NULL;
+    state->scores = NULL;
+    state->Fi = NULL;
+    state->CRi = NULL;
+}
+
+static int de_state_alloc(DeState *state, int params, int popsize) {
+    if (!state || params <= 0 || popsize < 4)
+        return 0;
+
+    memset(state, 0, sizeof(*state));
+    state->params = params;
+    state->capacity_popsize = popsize;
+    state->active_popsize = popsize;
+    state->pop = (double *)malloc((size_t)popsize * (size_t)params * sizeof(double));
+    state->scores = (double *)malloc((size_t)popsize * sizeof(double));
+    state->Fi = (double *)malloc((size_t)popsize * sizeof(double));
+    state->CRi = (double *)malloc((size_t)popsize * sizeof(double));
+    if (!state->pop || !state->scores || !state->Fi || !state->CRi) {
+        de_state_free(state);
+        return 0;
+    }
+    return 1;
+}
+
+static void de_state_init_random(
+    DeState *state,
+    double bounds_min,
+    double bounds_max,
+    double (*objective)(const double *xs, int n),
+    uint64_t seed)
+{
+    uint64_t rng = seed;
+    const size_t agent_len = (size_t)state->params;
+    state->active_popsize = state->capacity_popsize;
+    for (int i = 0; i < state->active_popsize; ++i) {
+        double *agent = state->pop + (size_t)i * agent_len;
+        for (int j = 0; j < state->params; ++j)
+            agent[j] = de_rand_range(&rng, bounds_min, bounds_max);
+        state->scores[i] = objective(agent, state->params);
+        state->Fi[i] = JDE_F_LO + de_rand01(&rng) * (JDE_F_HI - JDE_F_LO);
+        state->CRi[i] = de_rand01(&rng);
+    }
+}
+
+static void de_state_rescore(
+    DeState *state,
+    double (*objective)(const double *xs, int n))
+{
+    const size_t agent_len = (size_t)state->params;
+    for (int i = 0; i < state->active_popsize; ++i)
+        state->scores[i] = objective(state->pop + (size_t)i * agent_len,
+                                     state->params);
+}
+
+static int de_state_best_index(const DeState *state) {
+    int best_idx = 0;
+    double best = state->scores[0];
+    for (int i = 1; i < state->active_popsize; ++i) {
+        if (state->scores[i] < best) {
+            best = state->scores[i];
+            best_idx = i;
+        }
+    }
+    return best_idx;
+}
+
+static double de_state_best_score(const DeState *state, double *best_out) {
+    const int best_idx = de_state_best_index(state);
+    if (best_out)
+        memcpy(best_out, state->pop + (size_t)best_idx * (size_t)state->params,
+               (size_t)state->params * sizeof(double));
+    return state->scores[best_idx];
 }
 
 static inline int de_lpsr_population_size(int initial_popsize, int min_popsize,
@@ -74,12 +169,8 @@ static inline int de_lpsr_population_size(int initial_popsize, int min_popsize,
     return next;
 }
 
-/* ── DE/rand/1/bin with jDE ──────────────────────────────────────
-   Returns the best objective value found. The population converges
-   in-place; only the final best score is reported.               */
-static double de_solve_impl(
-    int      params,
-    int      initial_popsize,
+static double de_state_evolve(
+    DeState *de_state,
     int      min_popsize,
     int      generations,
     double   bounds_min,
@@ -88,37 +179,33 @@ static double de_solve_impl(
     uint64_t seed,
     double  *best_out)
 {
-    if (params <= 0 || initial_popsize < 4 || min_popsize < 4 ||
-        min_popsize > initial_popsize || generations < 0 || !objective)
+    if (!de_state || de_state->params <= 0 || de_state->active_popsize < 4 ||
+        min_popsize < 4 || min_popsize > de_state->active_popsize ||
+        generations < 0 || !objective)
         return INFINITY;
 
+    const int params = de_state->params;
+    const int initial_popsize = de_state->active_popsize;
     const size_t agent_len = (size_t)params;
     const size_t capacity_len = (size_t)initial_popsize * agent_len;
     const int threads = omp_get_max_threads();
     const int use_lpsr = min_popsize < initial_popsize;
-
-    double *pop           = (double *)malloc(capacity_len * sizeof(double));
     double *prev_pop      = (double *)malloc(capacity_len * sizeof(double));
     double *trial_scratch = (double *)malloc((size_t)threads * agent_len * sizeof(double));
-    double *scores        = (double *)malloc((size_t)initial_popsize * sizeof(double));
-    double *Fi            = (double *)malloc((size_t)initial_popsize * sizeof(double));
-    double *CRi           = (double *)malloc((size_t)initial_popsize * sizeof(double));
     double *tmp_scores    = use_lpsr ? (double *)malloc((size_t)initial_popsize * sizeof(double)) : NULL;
     double *tmp_Fi        = use_lpsr ? (double *)malloc((size_t)initial_popsize * sizeof(double)) : NULL;
     double *tmp_CRi       = use_lpsr ? (double *)malloc((size_t)initial_popsize * sizeof(double)) : NULL;
     DeRank *rank          = use_lpsr ? (DeRank *)malloc((size_t)initial_popsize * sizeof(DeRank)) : NULL;
-    if (!pop || !prev_pop || !trial_scratch || !scores || !Fi || !CRi ||
+    if (!prev_pop || !trial_scratch ||
         (use_lpsr && (!tmp_scores || !tmp_Fi || !tmp_CRi || !rank))) {
-        free(pop); free(prev_pop); free(trial_scratch);
-        free(scores); free(Fi); free(CRi);
+        free(prev_pop); free(trial_scratch);
         free(tmp_scores); free(tmp_Fi); free(tmp_CRi); free(rank);
         return INFINITY;
     }
 
     uint64_t *rng_states = (uint64_t *)malloc((size_t)threads * sizeof(uint64_t));
     if (!rng_states) {
-        free(pop); free(prev_pop); free(trial_scratch);
-        free(scores); free(Fi); free(CRi);
+        free(prev_pop); free(trial_scratch);
         free(tmp_scores); free(tmp_Fi); free(tmp_CRi); free(rank);
         return INFINITY;
     }
@@ -127,17 +214,11 @@ static double de_solve_impl(
         rng_states[t] = de_splitmix64(&s);
     }
 
-    /* ── initialise population ───────────────────────────────── */
-    for (int i = 0; i < initial_popsize; ++i) {
-        double *agent = pop + (size_t)i * agent_len;
-        for (int j = 0; j < params; ++j)
-            agent[j] = de_rand_range(&rng_states[0], bounds_min, bounds_max);
-        scores[i] = objective(agent, params);
-        Fi[i]  = JDE_F_LO + de_rand01(&rng_states[0]) * (JDE_F_HI - JDE_F_LO);
-        CRi[i] = de_rand01(&rng_states[0]);
-    }
-
     int active_popsize = initial_popsize;
+    double *pop = de_state->pop;
+    double *scores = de_state->scores;
+    double *Fi = de_state->Fi;
+    double *CRi = de_state->CRi;
 
     /* ── main loop ───────────────────────────────────────────── */
 #pragma omp parallel default(none) shared(params, agent_len, pop, prev_pop, trial_scratch, scores, Fi, CRi, tmp_scores, tmp_Fi, tmp_CRi, rank, rng_states, active_popsize, initial_popsize, min_popsize, use_lpsr, generations, bounds_min, bounds_max, objective)
@@ -226,29 +307,46 @@ static double de_solve_impl(
         }
     }
 
-    int best_idx = 0;
-    double best = scores[0];
-    for (int i = 1; i < active_popsize; ++i) {
-        if (scores[i] < best) {
-            best = scores[i];
-            best_idx = i;
-        }
-    }
-    if (best_out)
-        memcpy(best_out, pop + (size_t)best_idx * agent_len,
-               agent_len * sizeof(double));
+    de_state->active_popsize = active_popsize;
+    const double best = de_state_best_score(de_state, best_out);
 
     free(rng_states);
-    free(pop);
     free(prev_pop);
     free(trial_scratch);
-    free(scores);
-    free(Fi);
-    free(CRi);
     free(tmp_scores);
     free(tmp_Fi);
     free(tmp_CRi);
     free(rank);
+    return best;
+}
+
+/* ── DE/rand/1/bin with jDE ──────────────────────────────────────
+   Returns the best objective value found. The population converges
+   in-place; only the final best score is reported.               */
+static double de_solve_impl(
+    int      params,
+    int      initial_popsize,
+    int      min_popsize,
+    int      generations,
+    double   bounds_min,
+    double   bounds_max,
+    double (*objective)(const double *xs, int n),
+    uint64_t seed,
+    double  *best_out)
+{
+    if (params <= 0 || initial_popsize < 4 || min_popsize < 4 ||
+        min_popsize > initial_popsize || generations < 0 || !objective)
+        return INFINITY;
+
+    DeState state;
+    if (!de_state_alloc(&state, params, initial_popsize))
+        return INFINITY;
+
+    de_state_init_random(&state, bounds_min, bounds_max, objective, seed);
+    const double best = de_state_evolve(&state, min_popsize, generations,
+                                        bounds_min, bounds_max, objective,
+                                        seed, best_out);
+    de_state_free(&state);
     return best;
 }
 
