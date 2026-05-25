@@ -2,16 +2,13 @@ CC ?= gcc
 CFLAGS ?= -O3 -march=native -ffast-math -fopenmp -DNDEBUG
 LDFLAGS ?= -fopenmp
 
-all: de_c de_bench de_experiments
+all: de_c de_bench
 
-de_c: main.c
+de_c: main.c de_solver.h
 	$(CC) $(CFLAGS) main.c -o de_c $(LDFLAGS)
 
-de_bench: de_bench.c
+de_bench: de_bench.c de_solver.h
 	$(CC) $(CFLAGS) de_bench.c -o de_bench $(LDFLAGS) -lm
-
-de_experiments: de_experiments.c
-	$(CC) $(CFLAGS) de_experiments.c -o de_experiments $(LDFLAGS) -lm
 
 clean:
 	rm -f de_c de_bench de_experiments

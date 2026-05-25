@@ -30,7 +30,7 @@ When N decreases, discard the (N_old - N_new) worst individuals.
 
 ## Implementation sketch
 
-In `de_bench.c` `run_case()`:
+In `de_solver.h` `de_solve()`:
 
 1. Compute `N_init`, `N_min` from problem dimensions
 2. Allocate pop/trials/scores/Fi/CRi for `N_init` (not fixed POPSIZE)

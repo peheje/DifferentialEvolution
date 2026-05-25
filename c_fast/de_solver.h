@@ -43,6 +43,13 @@ static inline double de_clamp(double x, double lo, double hi) {
     return x < lo ? lo : (x > hi ? hi : x);
 }
 
+static inline void de_pick3(uint64_t *state, int popsize, int i,
+                            int *r0, int *r1, int *r2) {
+    do { *r0 = de_rand_int(state, popsize); } while (*r0 == i);
+    do { *r1 = de_rand_int(state, popsize); } while (*r1 == i || *r1 == *r0);
+    do { *r2 = de_rand_int(state, popsize); } while (*r2 == i || *r2 == *r0 || *r2 == *r1);
+}
+
 /* ── DE/rand/1/bin with jDE ──────────────────────────────────────
    Returns the best objective value found. The population converges
    in-place; only the final best score is reported.               */
@@ -55,23 +62,29 @@ static double de_solve(
     double (*objective)(const double *xs, int n),
     uint64_t seed)
 {
+    if (params <= 0 || popsize < 4 || generations < 0 || !objective)
+        return INFINITY;
+
     const size_t agent_len = (size_t)params;
     const size_t pop_len   = (size_t)popsize * agent_len;
+    const int threads = omp_get_max_threads();
 
-    double *pop    = (double *)malloc(pop_len * sizeof(double));
-    double *trials = (double *)malloc(pop_len * sizeof(double));
-    double *scores = (double *)malloc((size_t)popsize * sizeof(double));
-    double *Fi     = (double *)malloc((size_t)popsize * sizeof(double));
-    double *CRi    = (double *)malloc((size_t)popsize * sizeof(double));
-    if (!pop || !trials || !scores || !Fi || !CRi) {
-        free(pop); free(trials); free(scores); free(Fi); free(CRi);
+    double *pop           = (double *)malloc(pop_len * sizeof(double));
+    double *prev_pop      = (double *)malloc(pop_len * sizeof(double));
+    double *trial_scratch = (double *)malloc((size_t)threads * agent_len * sizeof(double));
+    double *scores        = (double *)malloc((size_t)popsize * sizeof(double));
+    double *Fi            = (double *)malloc((size_t)popsize * sizeof(double));
+    double *CRi           = (double *)malloc((size_t)popsize * sizeof(double));
+    if (!pop || !prev_pop || !trial_scratch || !scores || !Fi || !CRi) {
+        free(pop); free(prev_pop); free(trial_scratch);
+        free(scores); free(Fi); free(CRi);
         return INFINITY;
     }
 
-    const int threads = omp_get_max_threads();
     uint64_t *rng_states = (uint64_t *)malloc((size_t)threads * sizeof(uint64_t));
     if (!rng_states) {
-        free(pop); free(trials); free(scores); free(Fi); free(CRi);
+        free(pop); free(prev_pop); free(trial_scratch);
+        free(scores); free(Fi); free(CRi);
         return INFINITY;
     }
     for (int t = 0; t < threads; ++t) {
@@ -90,12 +103,17 @@ static double de_solve(
     }
 
     /* ── main loop ───────────────────────────────────────────── */
-#pragma omp parallel default(none) shared(params, agent_len, pop, trials, scores, Fi, CRi, rng_states, popsize, generations, bounds_min, bounds_max, objective)
+#pragma omp parallel default(none) shared(params, agent_len, pop_len, pop, prev_pop, trial_scratch, scores, Fi, CRi, rng_states, popsize, generations, bounds_min, bounds_max, objective)
     {
         const int tid = omp_get_thread_num();
         uint64_t *state = &rng_states[tid];
+        double *trial = trial_scratch + (size_t)tid * agent_len;
 
         for (int g = 0; g < generations; ++g) {
+#pragma omp for schedule(static)
+            for (size_t k = 0; k < pop_len; ++k)
+                prev_pop[k] = pop[k];
+
 #pragma omp for schedule(static)
             for (int i = 0; i < popsize; ++i) {
                 /* ── jDE: maybe re-sample F_i / CR_i ──────────── */
@@ -107,22 +125,21 @@ static double de_solve(
                     CRi_try = de_rand01(state);
 
                 /* ── DE/rand/1/bin ───────────────────────────── */
-                const int i0 = de_rand_int(state, popsize);
-                const int i1 = de_rand_int(state, popsize);
-                const int i2 = de_rand_int(state, popsize);
+                int i0, i1, i2;
+                de_pick3(state, popsize, i, &i0, &i1, &i2);
 
-                const double *x0 = pop + (size_t)i0 * agent_len;
-                const double *x1 = pop + (size_t)i1 * agent_len;
-                const double *x2 = pop + (size_t)i2 * agent_len;
+                const double *x0 = prev_pop + (size_t)i0 * agent_len;
+                const double *x1 = prev_pop + (size_t)i1 * agent_len;
+                const double *x2 = prev_pop + (size_t)i2 * agent_len;
+                const double *xt_prev = prev_pop + (size_t)i * agent_len;
                 double *xt       = pop + (size_t)i  * agent_len;
-                double *trial    = trials + (size_t)i * agent_len;
 
                 for (int j = 0; j < params; ++j) {
                     if (de_rand01(state) < CRi_try)
                         trial[j] = de_clamp(x0[j] + (x1[j] - x2[j]) * Fi_try,
                                             bounds_min, bounds_max);
                     else
-                        trial[j] = xt[j];
+                        trial[j] = xt_prev[j];
                 }
 
                 const double trial_score = objective(trial, params);
@@ -142,7 +159,8 @@ static double de_solve(
 
     free(rng_states);
     free(pop);
-    free(trials);
+    free(prev_pop);
+    free(trial_scratch);
     free(scores);
     free(Fi);
     free(CRi);

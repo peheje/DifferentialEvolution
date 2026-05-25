@@ -44,13 +44,12 @@ jDE-only            8.1×10⁻²⁶ ✓   0.0    ✓     219    ✓    1.8×10�
    benchmarks. The archive is a Rosenbrock specialist — useful if that's your
    only problem, harmful otherwise.
 
-## How to reproduce
+## Reproduction note
 
-The experiment harness is in `de_experiments.c`. Build and run:
-
-```sh
-make de_experiments && ./de_experiments
-```
+The temporary harness used to generate these numbers was removed after the
+shared solver was extracted into `de_solver.h`. Recreate archive variants in a
+short-lived experiment branch rather than keeping alternate DE implementations
+in main.
 
 ## References
 
