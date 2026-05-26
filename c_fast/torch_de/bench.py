@@ -156,6 +156,33 @@ BENCHMARKS = {
         "huber_delta": None,
         "bounds": (-5.0, 5.0),
     },
+    # Scale benchmarks: same task, larger architectures
+    "pair5-hard-wider": {
+        "task": "pair5-hard",
+        "hidden_layers": 1,
+        "hidden": 64,
+        "popsize": 768,
+        "min_popsize": 384,
+        "generations": 12000,
+        "strategy": 0,
+        "pbest_percent": 0,
+        "loss": "mse",
+        "huber_delta": None,
+        "bounds": (-5.0, 5.0),
+    },
+    "pair5-hard-deeper": {
+        "task": "pair5-hard",
+        "hidden_layers": 2,
+        "hidden": 64,
+        "popsize": 768,
+        "min_popsize": 384,
+        "generations": 12000,
+        "strategy": 0,
+        "pbest_percent": 0,
+        "loss": "mse",
+        "huber_delta": None,
+        "bounds": (-5.0, 5.0),
+    },
 }
 
 
