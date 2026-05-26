@@ -2,3 +2,5 @@ de_c
 de_bench
 de_xor
 de_seq
+.venv/
+__pycache__/
