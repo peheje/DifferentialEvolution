@@ -6,6 +6,7 @@ Run with: python -m torch_de.validate
 import math
 import sys
 
+import numpy as np
 import torch
 
 from . import mlp
@@ -171,6 +172,64 @@ def guardrail_e_strategy_smoke():
     print()
 
 
+def guardrail_g_pick_indices():
+    """Property test for _pick_all_indices: no self-pick, no extra-exclude,
+    all mutually distinct per row.  Many seeds and population sizes."""
+    print("Guardrail G: _pick_all_indices property test")
+
+    from .de import _pick_all_indices
+
+    P_sizes = [4, 5, 8, 32, 768]
+    n_picks = [2, 3]
+    seeds = list(range(50))
+
+    for P in P_sizes:
+        for n in n_picks:
+            if n >= P:
+                continue  # can't pick n distinct from P if n >= P
+            for seed in seeds:
+                rng = np.random.Generator(np.random.PCG64(seed))
+
+                # Without extra_exclude
+                idx = _pick_all_indices(rng, P, n, None)
+                _check(_validate_pick_indices(idx, P, n, None),
+                       f"P={P} n={n} seed={seed} (no extra)")
+
+                # With extra_exclude (random array)
+                extra = rng.integers(0, P, size=P).astype(np.int32)
+                # Ensure extra[i] != i for at least some rows to stress-test
+                idx2 = _pick_all_indices(rng, P, n, extra)
+                _check(_validate_pick_indices(idx2, P, n, extra),
+                       f"P={P} n={n} seed={seed} (with extra)")
+
+    print()
+
+
+def _validate_pick_indices(idx, P, n_pick, extra_exclude_arr):
+    """Return True if idx passes all invariants, else a string describing the failure."""
+    row_idx = np.arange(P, dtype=np.int32)
+
+    for k in range(n_pick):
+        # No self-pick
+        if (idx[:, k] == row_idx).any():
+            bad = np.where(idx[:, k] == row_idx)[0]
+            return f"col {k}: self-pick at rows {bad[:5].tolist()}"
+
+        # No extra-exclude match
+        if extra_exclude_arr is not None:
+            if (idx[:, k] == extra_exclude_arr).any():
+                bad = np.where(idx[:, k] == extra_exclude_arr)[0]
+                return f"col {k}: extra-exclude match at rows {bad[:5].tolist()}"
+
+        # No duplicates against earlier columns
+        for prev_k in range(k):
+            if (idx[:, k] == idx[:, prev_k]).any():
+                bad = np.where(idx[:, k] == idx[:, prev_k])[0]
+                return f"col {k}: dup with col {prev_k} at rows {bad[:5].tolist()}"
+
+    return True
+
+
 def guardrail_f_structural():
     """Structural determinism: forward pass consistency, pop vs individual.
 
@@ -230,6 +289,7 @@ def run_all():
     guardrail_c_trivial_sanity()
     guardrail_d_de_smoke()
     guardrail_e_strategy_smoke()
+    guardrail_g_pick_indices()
     guardrail_f_structural()
 
     print("=" * 60)
