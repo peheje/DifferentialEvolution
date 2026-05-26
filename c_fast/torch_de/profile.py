@@ -44,7 +44,7 @@ def de_solve_instrumented(
     CRi = torch.from_numpy(
         rng.uniform(0.0, 1.0, size=P)).to(dtype=dtype, device=device)
 
-    torch.manual_seed(int(seed))
+    torch.manual_seed(int(seed) & 0x7FFF_FFFF_FFFF_FFFF)
 
     scores = objective_fn(pop)
 

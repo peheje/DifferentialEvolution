@@ -183,6 +183,32 @@ BENCHMARKS = {
         "huber_delta": None,
         "bounds": (-5.0, 5.0),
     },
+    "pair5-hard-wider-basepbest50": {
+        "task": "pair5-hard",
+        "hidden_layers": 1,
+        "hidden": 64,
+        "popsize": 768,
+        "min_popsize": 384,
+        "generations": 12000,
+        "strategy": 5,
+        "pbest_percent": 50,
+        "loss": "mse",
+        "huber_delta": None,
+        "bounds": (-5.0, 5.0),
+    },
+    "pair5-hard-deeper-basepbest50": {
+        "task": "pair5-hard",
+        "hidden_layers": 2,
+        "hidden": 64,
+        "popsize": 768,
+        "min_popsize": 384,
+        "generations": 12000,
+        "strategy": 5,
+        "pbest_percent": 50,
+        "loss": "mse",
+        "huber_delta": None,
+        "bounds": (-5.0, 5.0),
+    },
 }
 
 

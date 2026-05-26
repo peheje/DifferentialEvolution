@@ -126,7 +126,7 @@ def de_solve(
         rng.uniform(0.0, 1.0, size=P)).to(dtype=dtype, device=device)
 
     # Seed torch RNG for GPU-side random generation (crossover/jrand)
-    torch.manual_seed(int(seed))
+    torch.manual_seed(int(seed) & 0x7FFF_FFFF_FFFF_FFFF)
 
     # Evaluate initial population
     scores = objective_fn(pop)
