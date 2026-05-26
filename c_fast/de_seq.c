@@ -1250,48 +1250,65 @@ static double const *genann_run_ln(genann const *ann, double const *inputs) {
 /* ── batched forward pass ─────────────────────────────────────────
    Evaluates all samples at once with hand-rolled matmuls instead of
    512 individual genann_run calls. Two GEMM-like operations + bias
-   replace the per-sample loop, letting the compiler auto-vectorize. */
+   replace the per-sample loop, letting the compiler auto-vectorize.
+   W is packed tightly with running offsets (no gaps).  Hidden
+   activations use ping-pong buffers for multi-layer correctness.   */
 
-static _Thread_local double *tl_batch_hidden;   /* [samples*hidden] */
-static _Thread_local double *tl_batch_out;      /* [samples*outputs] */
-static _Thread_local double *tl_batch_W;        /* weight extraction */
-static _Thread_local double *tl_batch_bias;     /* bias extraction */
+static _Thread_local double *tl_bh_a;       /* hidden ping-pong A */
+static _Thread_local double *tl_bh_b;       /* hidden ping-pong B */
+static _Thread_local double *tl_batch_out;  /* output buffer       */
+static _Thread_local double *tl_batch_W;    /* packed weights      */
+static _Thread_local double *tl_batch_bias; /* packed biases       */
 static _Thread_local int tl_batch_samples;
 static _Thread_local int tl_batch_inputs;
-static _Thread_local int tl_batch_hidden_n;
+static _Thread_local int tl_batch_hidden;
+static _Thread_local int tl_batch_layers;
 static _Thread_local int tl_batch_outputs;
 
 static void batch_ensure_buffers(int samples, int inputs,
-                                  int hidden, int outputs) {
+                                  int hidden, int hidden_layers,
+                                  int outputs) {
     if (tl_batch_samples == samples && tl_batch_inputs == inputs &&
-        tl_batch_hidden_n == hidden && tl_batch_outputs == outputs)
+        tl_batch_hidden == hidden && tl_batch_layers == hidden_layers &&
+        tl_batch_outputs == outputs)
         return;
 
-    free(tl_batch_hidden);
-    free(tl_batch_out);
-    const int reg_w = (inputs + 1) * hidden + (hidden + 1) * outputs;
-    const int n_bias = hidden + outputs;
-    free(tl_batch_W);
-    free(tl_batch_bias);
+    free(tl_bh_a); free(tl_bh_b); free(tl_batch_out);
+    free(tl_batch_W); free(tl_batch_bias);
+    tl_bh_a = tl_bh_b = NULL;
+    tl_batch_out = NULL; tl_batch_W = NULL; tl_batch_bias = NULL;
 
-    tl_batch_hidden = (double *)malloc(
+    tl_bh_a = (double *)malloc(
+        (size_t)samples * (size_t)hidden * sizeof(double));
+    tl_bh_b = (double *)malloc(
         (size_t)samples * (size_t)hidden * sizeof(double));
     tl_batch_out = (double *)malloc(
         (size_t)samples * (size_t)outputs * sizeof(double));
-    tl_batch_W = (double *)malloc((size_t)reg_w * sizeof(double));
-    tl_batch_bias = (double *)malloc((size_t)n_bias * sizeof(double));
-    if (!tl_batch_hidden || !tl_batch_out || !tl_batch_W || !tl_batch_bias) {
+
+    /* packed W: hidden_0(H*I) + rest((L-1)*H*H) + output(O*H) */
+    const size_t w_sz = ((size_t)hidden * inputs
+        + (size_t)(hidden_layers > 0 ? hidden_layers - 1 : 0)
+            * hidden * hidden
+        + (size_t)outputs * (hidden_layers > 0 ? hidden : inputs));
+    const size_t b_sz = (size_t)hidden_layers * hidden + outputs;
+
+    tl_batch_W = (double *)malloc(w_sz * sizeof(double));
+    tl_batch_bias = (double *)malloc(b_sz * sizeof(double));
+
+    if (!tl_bh_a || !tl_bh_b || !tl_batch_out ||
+        !tl_batch_W || !tl_batch_bias) {
         fprintf(stderr, "batch buffer alloc failed\n");
         abort();
     }
     tl_batch_samples = samples;
     tl_batch_inputs = inputs;
-    tl_batch_hidden_n = hidden;
+    tl_batch_hidden = hidden;
+    tl_batch_layers = hidden_layers;
     tl_batch_outputs = outputs;
 }
 
-/* Extract genann flat weights into W/bias arrays.  W is packed
-   [hidden*inputs][hidden*(hidden_layers-1)*hidden][outputs*hidden].
+/* Extract genann flat weights into packed W/bias arrays.
+   W uses running offsets — no gaps between layers.
    Biases are stored negated (genann convention: sum = *w++ * -1.0). */
 static void batch_extract_weights(const genann *ann) {
     const double *w = ann->weight;
@@ -1301,75 +1318,71 @@ static void batch_extract_weights(const genann *ann) {
     for (int h = 0; h < ann->hidden_layers; ++h) {
         const int prev = (h == 0) ? ann->inputs : ann->hidden;
         for (int j = 0; j < ann->hidden; ++j) {
-            B[h * ann->hidden + j] = -(*w++);
+            *B++ = -(*w++);
             for (int k = 0; k < prev; ++k)
-                W[(h * ann->hidden + j) * prev + k] = *w++;
+                *W++ = *w++;
         }
     }
     /* output layer */
-    const int out_off = ann->hidden_layers * ann->hidden;
     for (int o = 0; o < ann->outputs; ++o) {
-        B[out_off + o] = -(*w++);
+        *B++ = -(*w++);
         for (int k = 0; k < ann->hidden; ++k)
-            W[out_off * ann->hidden + o * ann->hidden + k] = *w++;
+            *W++ = *w++;
     }
 }
 
-/* batched forward: hidden = act(input * W_h^T + bias_h), then output */
+/* Ping-pong hidden buffers: layer h reads from inp, writes to out.
+   After activation, inp ← out for the next layer.  No self-overlap. */
 static void batch_forward(const genann *ann,
-                          const double *input,   /* [samples*inputs] */
-                          double *output,         /* [samples*outputs] */
+                          const double *input,
+                          double *output,
                           int samples) {
     const int I = ann->inputs, H = ann->hidden, O = ann->outputs;
+    const double *Wr = tl_batch_W;
+    const double *Br = tl_batch_bias;
 
-    /* hidden layer(s): pre-act then activate */
+    const double *inp = input;
+    int inp_dim = I;
+
     for (int h = 0; h < ann->hidden_layers; ++h) {
-        const int prev = (h == 0) ? I : H;
-        const double * __restrict Wl = tl_batch_W
-            + (size_t)h * H * prev;
-        const double * __restrict Bl = tl_batch_bias
-            + (size_t)h * H;
-        const double * __restrict inp = (h == 0) ? input
-            : tl_batch_hidden;
-        double * __restrict out = tl_batch_hidden;
+        const int prev = inp_dim;
+        double *out = (h % 2 == 0) ? tl_bh_a : tl_bh_b;
 
         for (int s = 0; s < samples; ++s) {
             const double * __restrict xs = inp + (size_t)s * prev;
             double * __restrict ys = out + (size_t)s * H;
             for (int j = 0; j < H; ++j) {
-                double sum = Bl[j];
-                const double * __restrict wr = Wl + (size_t)j * prev;
+                double sum = Br[j];
+                const double * __restrict wr = Wr + (size_t)j * prev;
                 for (int k = 0; k < prev; ++k)
                     sum += xs[k] * wr[k];
                 ys[j] = sum;
             }
         }
 
-        /* activation */
+        /* activation in-place */
         for (int s = 0; s < samples; ++s) {
-            double * __restrict ys = tl_batch_hidden + (size_t)s * H;
+            double * __restrict ys = out + (size_t)s * H;
             for (int j = 0; j < H; ++j)
                 ys[j] = ann->activation_hidden(ann, ys[j]);
         }
+
+        Wr += (size_t)H * prev;
+        Br += H;
+        inp = out;
+        inp_dim = H;
     }
 
     /* output layer */
-    {
-        const int off = ann->hidden_layers * H;
-        const double * __restrict Wo = tl_batch_W
-            + (size_t)off * H;  /* [O * H] */
-        const double * __restrict Bo = tl_batch_bias + off;
-
-        for (int s = 0; s < samples; ++s) {
-            const double * __restrict hs = tl_batch_hidden + (size_t)s * H;
-            double * __restrict ys = output + (size_t)s * O;
-            for (int o = 0; o < O; ++o) {
-                double sum = Bo[o];
-                const double * __restrict wr = Wo + (size_t)o * H;
-                for (int k = 0; k < H; ++k)
-                    sum += hs[k] * wr[k];
-                ys[o] = ann->activation_output(ann, sum);
-            }
+    for (int s = 0; s < samples; ++s) {
+        const double * __restrict hs = inp + (size_t)s * H;
+        double * __restrict ys = output + (size_t)s * O;
+        for (int o = 0; o < O; ++o) {
+            double sum = Br[o];
+            const double * __restrict wr = Wr + (size_t)o * H;
+            for (int k = 0; k < H; ++k)
+                sum += hs[k] * wr[k];
+            ys[o] = ann->activation_output(ann, sum);
         }
     }
 }
@@ -1489,7 +1502,8 @@ static double task_loss(const double *weights, int n) {
 
     /* ── batched path: no rollout, no LN ─────────────────────────── */
     if (!use_rollout && !use_ln) {
-        batch_ensure_buffers(samples, inputs, ann->hidden, outputs);
+        batch_ensure_buffers(samples, inputs, ann->hidden,
+                             ann->hidden_layers, outputs);
         batch_extract_weights(ann);
         batch_forward(ann, task->input, tl_batch_out, samples);
 
