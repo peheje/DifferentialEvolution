@@ -210,24 +210,33 @@ def guardrail_g_pick_indices():
 
 
 def _check_negative():
-    """Intentional malformed indices — verify validator rejects them."""
+    """Intentional malformed indices — verify validator rejects each failure mode.
+
+    Each test starts from a known-valid array (row i: (i+1)%P, (i+2)%P, (i+3)%P)
+    and introduces exactly one violation.
+    """
     P, n = 8, 3
 
+    # Build valid array: row i picks 3 distinct values in [0, P) excluding i
+    valid = np.array([[(i + k + 1) % P for k in range(n)]
+                       for i in range(P)], dtype=np.int32)
+
     # Self-pick: set row 0 column 0 to its row index
-    idx = np.arange(P * n, dtype=np.int32).reshape(P, n) % P
+    idx = valid.copy()
     idx[0, 0] = 0
     ok, detail = _validate_pick_indices(idx, P, n, None)
     _check(not ok, f"negative: self-pick rejected ({detail})")
 
-    # Extra-exclude match: extra[0]=5, set col 1 = 5
-    idx = np.arange(P * n, dtype=np.int32).reshape(P, n) % P
-    idx[0, 1] = 5
-    extra = np.full(P, 5, dtype=np.int32)
+    # Extra-exclude: extra[0] = valid[0,1] so col 1 violates only row 0
+    idx = valid.copy()
+    extra = np.arange(P, dtype=np.int32)   # extra[i]=i, no constraint on other rows
+    extra[0] = int(idx[0, 1])              # only row 0 gets a constraint
+    # idx[0, 1] already equals extra[0] — exactly one extra-exclude violation
     ok, detail = _validate_pick_indices(idx, P, n, extra)
     _check(not ok, f"negative: extra-exclude rejected ({detail})")
 
-    # Duplicate within row: col 2 = col 0 on row 0
-    idx = np.arange(P * n, dtype=np.int32).reshape(P, n) % P
+    # Duplicate: set row 0 col 2 = col 0 (both = valid[0,0]), no self/extra involved
+    idx = valid.copy()
     idx[0, 2] = idx[0, 0]
     ok, detail = _validate_pick_indices(idx, P, n, None)
     _check(not ok, f"negative: duplicate rejected ({detail})")
