@@ -1278,25 +1278,30 @@ static void batch_ensure_buffers(int samples, int inputs,
     tl_bh_a = tl_bh_b = NULL;
     tl_batch_out = NULL; tl_batch_W = NULL; tl_batch_bias = NULL;
 
-    tl_bh_a = (double *)malloc(
-        (size_t)samples * (size_t)hidden * sizeof(double));
-    tl_bh_b = (double *)malloc(
-        (size_t)samples * (size_t)hidden * sizeof(double));
+    /* hidden ping-pong: only when there are hidden layers */
+    if (hidden_layers > 0) {
+        tl_bh_a = (double *)malloc(
+            (size_t)samples * (size_t)hidden * sizeof(double));
+        tl_bh_b = (double *)malloc(
+            (size_t)samples * (size_t)hidden * sizeof(double));
+    }
     tl_batch_out = (double *)malloc(
         (size_t)samples * (size_t)outputs * sizeof(double));
 
-    /* packed W: hidden_0(H*I) + rest((L-1)*H*H) + output(O*H) */
-    const size_t w_sz = ((size_t)hidden * inputs
-        + (size_t)(hidden_layers > 0 ? hidden_layers - 1 : 0)
-            * hidden * hidden
-        + (size_t)outputs * (hidden_layers > 0 ? hidden : inputs));
+    /* packed W: hidden_0(H*I) + rest((L-1)*H*H) + output(O * out_prev) */
+    const int out_prev = hidden_layers > 0 ? hidden : inputs;
+    const size_t w_sz = (hidden_layers > 0
+        ? ((size_t)hidden * inputs
+           + (size_t)(hidden_layers - 1) * hidden * hidden)
+        : (size_t)0)
+        + (size_t)outputs * out_prev;
     const size_t b_sz = (size_t)hidden_layers * hidden + outputs;
 
     tl_batch_W = (double *)malloc(w_sz * sizeof(double));
     tl_batch_bias = (double *)malloc(b_sz * sizeof(double));
 
-    if (!tl_bh_a || !tl_bh_b || !tl_batch_out ||
-        !tl_batch_W || !tl_batch_bias) {
+    if (!tl_batch_out || !tl_batch_W || !tl_batch_bias
+        || (hidden_layers > 0 && (!tl_bh_a || !tl_bh_b))) {
         fprintf(stderr, "batch buffer alloc failed\n");
         abort();
     }
@@ -1323,16 +1328,21 @@ static void batch_extract_weights(const genann *ann) {
                 *W++ = *w++;
         }
     }
-    /* output layer */
+    /* output layer: reads from last hidden (or raw input if no
+       hidden layers), with corresponding dimension. */
+    const int out_prev = ann->hidden_layers > 0
+                       ? ann->hidden : ann->inputs;
     for (int o = 0; o < ann->outputs; ++o) {
         *B++ = -(*w++);
-        for (int k = 0; k < ann->hidden; ++k)
+        for (int k = 0; k < out_prev; ++k)
             *W++ = *w++;
     }
 }
 
 /* Ping-pong hidden buffers: layer h reads from inp, writes to out.
-   After activation, inp ← out for the next layer.  No self-overlap. */
+   After activation, inp ← out for the next layer.  No self-overlap.
+   When hidden_layers == 0, the hidden loop is skipped and the output
+   layer reads directly from the raw input.                          */
 static void batch_forward(const genann *ann,
                           const double *input,
                           double *output,
@@ -1373,18 +1383,86 @@ static void batch_forward(const genann *ann,
         inp_dim = H;
     }
 
-    /* output layer */
+    /* output layer: inp_dim is H (last hidden) or I (raw input) */
+    const int out_prev = inp_dim;
     for (int s = 0; s < samples; ++s) {
-        const double * __restrict hs = inp + (size_t)s * H;
+        const double * __restrict hs = inp + (size_t)s * out_prev;
         double * __restrict ys = output + (size_t)s * O;
         for (int o = 0; o < O; ++o) {
             double sum = Br[o];
-            const double * __restrict wr = Wr + (size_t)o * H;
-            for (int k = 0; k < H; ++k)
+            const double * __restrict wr = Wr + (size_t)o * out_prev;
+            for (int k = 0; k < out_prev; ++k)
                 sum += hs[k] * wr[k];
             ys[o] = ann->activation_output(ann, sum);
         }
     }
+}
+
+/* ── batched-vs-scalar equivalence self-test ──────────────────────
+   Creates several genann architectures with deterministic random
+   weights and inputs, compares batch_forward against genann_run
+   sample-by-sample.  Called once at startup from main().           */
+static int batch_self_test(void) {
+    static const int archs[][4] = {
+        {2, 1, 12, 1},    /* 2->12->1           */
+        {2, 2, 12, 1},    /* 2->12->12->1 deep   */
+        {5, 1, 16, 1},    /* 5->16->1            */
+        {3, 0,  2, 1},    /* 3->1 no hidden      */
+        {2, 1, 12, 2},    /* 2->12->2 multi-out  */
+    };
+    const int n_archs = (int)(sizeof(archs) / sizeof(archs[0]));
+    const int n_samples = 64;
+    int failures = 0;
+
+    uint64_t rng = 0x5EED5EEDC0FFEEULL;
+    for (int a = 0; a < n_archs; ++a) {
+        const int I = archs[a][0], L = archs[a][1];
+        const int H = archs[a][2], O = archs[a][3];
+
+        genann *ann = genann_init(I, L, H, O);
+        if (!ann) { failures++; continue; }
+        ann->activation_output = genann_act_linear;
+
+        /* deterministic random weights */
+        for (int i = 0; i < ann->total_weights; ++i)
+            ann->weight[i] = de_rand_range(&rng, -5.0, 5.0);
+
+        /* deterministic random inputs */
+        double inputs[64 * 10]; /* max inputs = 10 */
+        for (int i = 0; i < n_samples * I; ++i)
+            inputs[i] = de_rand_range(&rng, -2.5, 2.5);
+
+        /* batched forward */
+        batch_ensure_buffers(n_samples, I, H > 0 ? H : 1, L, O);
+        batch_extract_weights(ann);
+        double batch_out[64 * 2]; /* max outputs = 2 */
+        batch_forward(ann, inputs, batch_out, n_samples);
+
+        /* per-sample reference */
+        double ref_out[64 * 2];
+        for (int i = 0; i < n_samples; ++i)
+            memcpy(ref_out + i * O,
+                   genann_run(ann, inputs + i * I),
+                   (size_t)O * sizeof(double));
+
+        double max_diff = 0.0;
+        for (int i = 0; i < n_samples * O; ++i) {
+            double d = fabs(batch_out[i] - ref_out[i]);
+            if (d > max_diff) max_diff = d;
+        }
+
+        if (max_diff > 1e-12) {
+            fprintf(stderr, "batch_self_test FAIL %d->%d->%d: max diff %.2e\n",
+                    I, H, O, max_diff);
+            failures++;
+        }
+        genann_free(ann);
+    }
+
+    if (failures)
+        fprintf(stderr, "batch_self_test: %d/%d architectures FAILED\n",
+                failures, n_archs);
+    return failures ? 1 : 0;
 }
 
 static genann *task_ann(const NnTask *task) {
@@ -2495,6 +2573,8 @@ static int run_curriculum(int generations_per_stage, int first_stage) {
 /* ── main ───────────────────────────────────────────────────────── */
 int main(int argc, char **argv) {
     setbuf(stdout, NULL);
+    if (batch_self_test() != 0)
+        return 1;
     init_generated_data();
 
     const int runs = argc > 2 ? atoi(argv[2]) : DEFAULT_RUNS;
