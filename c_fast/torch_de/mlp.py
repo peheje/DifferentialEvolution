@@ -120,13 +120,13 @@ def unpack_flat(flat, inputs, hidden_layers, hidden, outputs):
         n_out = int(r.max().item()) + 1
         n_in = int(c.max().item()) + 1
 
+        # Gather: pop[:, wi] directly indexes flat along last dim.
+        # wi iterates in row-major order, so reshape to [n_out, n_in].
         if batched:
-            W = torch.zeros(P, n_out, n_in, dtype=dtype, device=device)
-            W[:, r, c] = flat[:, wi]
+            W = flat[:, wi].view(P, n_out, n_in)
             B = -flat[:, bi]
         else:
-            W = torch.zeros(n_out, n_in, dtype=dtype, device=device)
-            W[r, c] = flat[wi]
+            W = flat[wi].view(n_out, n_in)
             B = -flat[bi]
 
         Ws.append(W)

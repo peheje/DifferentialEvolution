@@ -35,36 +35,39 @@ def _lpsr_population_size(initial_popsize, min_popsize, generations, generation)
     return nxt
 
 
-def _pick_indices(rng, P, i, n, extra_exclude=None):
-    """Pick n distinct random indices in [0, P), excluding i and extra_exclude.
+def _pick_all_indices(rng, P, n_pick, extra_exclude_arr=None):
+    """Vectorized: pick n_pick distinct indices in [0, P) for each of P rows.
 
-    Args:
-        rng: numpy Generator
-        P: population size
-        i: current individual index (always excluded)
-        n: number of distinct indices to pick
-        extra_exclude: optional int or iterable of additional excluded indices
-
-    Returns:
-        list of n int indices, mutually distinct and != i and != extra_exclude
+    Returns [P, n_pick] numpy array of distinct indices per row.
     """
-    excl = {int(i)}
-    if extra_exclude is not None:
-        if isinstance(extra_exclude, (int, np.integer)):
-            excl.add(int(extra_exclude))
-        else:
-            for x in extra_exclude:
-                excl.add(int(x))
+    idx = rng.integers(0, P, size=(P, n_pick)).astype(np.int32)
+    row_idx = np.arange(P, dtype=np.int32)
 
-    result = []
-    for _ in range(n):
-        while True:
-            idx = int(rng.integers(0, P))
-            if idx not in excl:
-                excl.add(idx)
-                result.append(idx)
-                break
-    return result
+    for k in range(n_pick):
+        # Exclude self
+        mask = idx[:, k] == row_idx
+        while mask.any():
+            idx[mask, k] = rng.integers(0, P, size=mask.sum()).astype(np.int32)
+            mask = idx[:, k] == row_idx
+
+        # Exclude extra per row
+        if extra_exclude_arr is not None:
+            mask = idx[:, k] == extra_exclude_arr
+            while mask.any():
+                idx[mask, k] = rng.integers(0, P, size=mask.sum()).astype(np.int32)
+                mask = (idx[:, k] == extra_exclude_arr) | (idx[:, k] == row_idx)
+
+        # Exclude duplicates against all earlier columns
+        for prev_k in range(k):
+            mask = idx[:, k] == idx[:, prev_k]
+            while mask.any():
+                idx[mask, k] = rng.integers(0, P, size=mask.sum()).astype(np.int32)
+                mask = idx[:, k] == idx[:, prev_k]
+                mask |= (idx[:, k] == row_idx)
+                if extra_exclude_arr is not None:
+                    mask |= (idx[:, k] == extra_exclude_arr)
+
+    return idx
 
 
 def de_solve(
@@ -155,44 +158,33 @@ def de_solve(
         Fi_try = torch.from_numpy(Fi_np).to(dtype=dtype, device=device)
         CRi_try = torch.from_numpy(CRi_np).to(dtype=dtype, device=device)
 
-        # === generate mutation base and difference vectors ===
-        # Pre-compute all random indices
-        idx_r1 = np.zeros(active, dtype=np.int32)
-        idx_r2 = np.zeros(active, dtype=np.int32)
-        idx_r3 = np.zeros(active, dtype=np.int32)
-        pbest_sel = np.zeros(active, dtype=np.int32)
+        # === generate mutation indices (vectorized) ===
+        if mutation_strategy == 0:
+            idx_all = _pick_all_indices(rng, active, 3)     # [P, 3]
+            idx_r1 = idx_all[:, 0]; idx_r2 = idx_all[:, 1]; idx_r3 = idx_all[:, 2]
+            pbest_sel = None
 
-        for i in range(active):
-            if mutation_strategy == 0:
-                # rand/1: pick 3 distinct != i
-                r1, r2, r3 = _pick_indices(rng, active, i, 3)
-                idx_r1[i] = r1
-                idx_r2[i] = r2
-                idx_r3[i] = r3
+        elif mutation_strategy == 1:
+            best_excl = np.full(active, best_idx, dtype=np.int32)
+            idx_all = _pick_all_indices(rng, active, 2, best_excl)  # [P, 2]
+            idx_r1 = idx_all[:, 0]; idx_r2 = idx_all[:, 1]
+            idx_r3 = None; pbest_sel = None
 
-            elif mutation_strategy == 1:
-                # best/1: pick 2 distinct != i and != best_idx
-                r1, r2 = _pick_indices(rng, active, i, 2,
-                                       extra_exclude=best_idx)
-                idx_r1[i] = r1
-                idx_r2[i] = r2
+        elif mutation_strategy == 5:
+            # pbest: pick from top p% vectorized, fix self-collisions
+            pbest_sel = sorted_cpu[rng.integers(0, pbest_count, size=active)]
+            if pbest_count > 1:
+                self_mask = pbest_sel == np.arange(active)
+                for _ in range(8):
+                    if not self_mask.any():
+                        break
+                    pbest_sel[self_mask] = sorted_cpu[
+                        rng.integers(0, pbest_count, size=self_mask.sum())]
+                    self_mask = pbest_sel == np.arange(active)
 
-            elif mutation_strategy == 5:
-                # basepbest/1: pbest from top p%, then 2 distinct != i and != pbest
-                pbest_pos = int(rng.integers(0, pbest_count))
-                pb = int(sorted_cpu[pbest_pos])
-                if pbest_count > 1:
-                    guard = 0
-                    while pb == i and guard < 8:
-                        pbest_pos = int(rng.integers(0, pbest_count))
-                        pb = int(sorted_cpu[pbest_pos])
-                        guard += 1
-                pbest_sel[i] = pb
-
-                r1, r2 = _pick_indices(rng, active, i, 2,
-                                       extra_exclude=pb)
-                idx_r1[i] = r1
-                idx_r2[i] = r2
+            idx_all = _pick_all_indices(rng, active, 2, pbest_sel)  # [P, 2]
+            idx_r1 = idx_all[:, 0]; idx_r2 = idx_all[:, 1]
+            idx_r3 = None
 
         # === build mutant tensors ===
         if mutation_strategy == 0:
@@ -200,14 +192,14 @@ def de_solve(
             r1_t = torch.from_numpy(idx_r1).to(device=device)
             r2_t = torch.from_numpy(idx_r2).to(device=device)
             r3_t = torch.from_numpy(idx_r3).to(device=device)
-            base = pop[r1_t]                      # [P, D]
-            diff = pop[r2_t] - pop[r3_t]           # [P, D]
+            base = pop[r1_t]
+            diff = pop[r2_t] - pop[r3_t]
 
         elif mutation_strategy == 1:
             # best/1: v = x_best + F * (x_r1 - x_r2)
             r1_t = torch.from_numpy(idx_r1).to(device=device)
             r2_t = torch.from_numpy(idx_r2).to(device=device)
-            base = pop[best_idx].unsqueeze(0).expand(active, -1)  # [P, D]
+            base = pop[best_idx].unsqueeze(0).expand(active, -1)
             diff = pop[r1_t] - pop[r2_t]
 
         elif mutation_strategy == 5:
@@ -215,7 +207,7 @@ def de_solve(
             pb_t = torch.from_numpy(pbest_sel).to(device=device)
             r1_t = torch.from_numpy(idx_r1).to(device=device)
             r2_t = torch.from_numpy(idx_r2).to(device=device)
-            base = pop[pb_t]                      # [P, D]
+            base = pop[pb_t]
             diff = pop[r1_t] - pop[r2_t]
 
         # === mutation (vectorized) ===
