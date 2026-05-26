@@ -320,6 +320,11 @@ def _main():
 
     dtype = torch.float64 if args.dtype == "float64" else torch.float32
 
+    if args.device == "cuda" and not torch.cuda.is_available():
+        print("ERROR: --device cuda but torch.cuda.is_available() == False")
+        print("  Use --device cpu or install a CUDA-capable PyTorch.")
+        sys.exit(1)
+
     unknown = [b for b in args.benchmarks if b not in BENCHMARKS]
     if unknown:
         print(f"Unknown benchmarks: {unknown}")
@@ -360,7 +365,8 @@ def _main():
     print("-" * 82)
     print(f"Total wall: {total_wall:.0f}ms ({total_wall / 1000:.1f}s)")
     print()
-    print("NOTE: Same target functions as C de_seq.c, independent data draws.")
+    print("NOTE: Same target/model/DE budget family as C de_seq.c, independent data")
+    print("      draws (RNG differs, torch sigmoid vs C cached-sigmoid LUT).")
     print("      Not directly comparable to C leaderboard without fixture export.")
 
 

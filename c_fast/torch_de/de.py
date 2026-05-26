@@ -133,9 +133,9 @@ def de_solve(
     for g in range(generations):
         active = P
 
-        # === ranking ===
-        sorted_indices = torch.argsort(scores)
-        best_idx = int(sorted_indices[0].item())
+        # === ranking (sorted once per generation, pulled to CPU) ===
+        sorted_cpu = torch.argsort(scores).cpu().numpy()
+        best_idx = int(sorted_cpu[0])
 
         pbest_count = 1
         if mutation_strategy == 5:
@@ -180,12 +180,12 @@ def de_solve(
             elif mutation_strategy == 5:
                 # basepbest/1: pbest from top p%, then 2 distinct != i and != pbest
                 pbest_pos = int(rng.integers(0, pbest_count))
-                pb = int(sorted_indices[pbest_pos].item())
+                pb = int(sorted_cpu[pbest_pos])
                 if pbest_count > 1:
                     guard = 0
                     while pb == i and guard < 8:
                         pbest_pos = int(rng.integers(0, pbest_count))
-                        pb = int(sorted_indices[pbest_pos].item())
+                        pb = int(sorted_cpu[pbest_pos])
                         guard += 1
                 pbest_sel[i] = pb
 
