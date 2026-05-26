@@ -2573,6 +2573,11 @@ static int run_curriculum(int generations_per_stage, int first_stage) {
 /* ── main ───────────────────────────────────────────────────────── */
 int main(int argc, char **argv) {
     setbuf(stdout, NULL);
+    if (argc > 1 && strcmp(argv[1], "--batch-self-test") == 0) {
+        int ret = batch_self_test();
+        printf("batch-self-test: %s\n", ret ? "FAIL" : "PASS");
+        return ret;
+    }
     if (batch_self_test() != 0)
         return 1;
     init_generated_data();
