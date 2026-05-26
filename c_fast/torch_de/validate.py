@@ -3,6 +3,7 @@
 Run with: python -m torch_de.validate
 """
 
+import math
 import sys
 
 import torch
@@ -66,8 +67,7 @@ def guardrail_b_param_counts():
 
 
 def guardrail_c_trivial_sanity():
-    """Trivial target sanity: zero weights should produce near-zero output
-    for tanh (tanh(0) = 0, so output = bias only)."""
+    """Trivial target sanity: zero weights, single bias, output shapes."""
     print("Guardrail C: trivial target sanity")
 
     model = mlp.MLP(2, 1, 4, 1)
@@ -81,13 +81,11 @@ def guardrail_c_trivial_sanity():
     _check(torch.allclose(out, torch.zeros_like(out), atol=1e-7),
            f"zero weights -> near-zero output (max |out| = {out.abs().max():.2e})")
 
-    # Non-zero bias test: set bias of first hidden neuron to 1.0
-    # In genann format: first weight is -bias, so set flat[0] = -1.0
+    # Non-zero bias test: sigmoid(1.0) ≈ 0.7311
+    # In genann format: first weight is -bias, so set flat[0] = -1.0 (bias=1.0)
     flat2 = torch.zeros(model.total_weights)
     flat2[0] = -1.0  # bias = 1.0 for first hidden neuron
     out2 = model.forward(flat2, inputs)
-    # tanh(1.0) ≈ 0.7616, then output bias is 0, so output depends on output weights
-    # With zero output weights, output = output_bias = 0
     _check(torch.allclose(out2, torch.zeros_like(out2), atol=1e-7),
            f"single bias, zero output weights -> near-zero (max |out| = {out2.abs().max():.2e})")
 
@@ -102,14 +100,13 @@ def guardrail_d_de_smoke():
     n_dims = task_spec["n_dims"]
     target_fn = task_spec["target_fn"]
 
-    model = mlp.MLP(n_dims, 1, 8, 1, activation=torch.tanh)
-    D = model.total_weights
+    model = mlp.MLP(n_dims, 1, 8, 1)
 
     train_in, train_tgt = task_mod.generate_data(
         128, n_dims, target_fn, device="cpu", dtype=torch.float32,
         seed=42)
 
-    # Evaluate initial random population
+    # Save/restore torch RNG state (not used by DE, but be safe)
     rng_state = torch.random.get_rng_state()
     torch.manual_seed(1234)
 
@@ -117,14 +114,13 @@ def guardrail_d_de_smoke():
         preds = model.population_forward(pop, train_in)
         return mse_loss(preds, train_tgt)
 
-    pop_init = torch.rand(32, D) * 10 - 5  # [-5, 5]
+    pop_init = torch.rand(32, model.total_weights) * 10 - 5  # [-5, 5]
     init_losses = objective(pop_init)
     init_best = float(init_losses.min())
 
-    # Run a few generations of DE
-    best_out = torch.zeros(D)
+    best_out = torch.zeros(model.total_weights)
     loss = de_solve(
-        D, 32, 32, 20,
+        model.total_weights, 32, 32, 20,
         -5.0, 5.0,
         objective, 42, best_out,
         mutation_strategy=0,
@@ -147,8 +143,7 @@ def guardrail_e_strategy_smoke():
     print("Guardrail E: strategy smoke tests")
 
     task_spec = task_mod.TASK_SPECS["pair1"]
-    model = mlp.MLP(2, 1, 8, 1, activation=torch.tanh)
-    D = model.total_weights
+    model = mlp.MLP(2, 1, 8, 1)
 
     train_in, train_tgt = task_mod.generate_data(
         128, 2, task_spec["target_fn"], device="cpu", dtype=torch.float32,
@@ -161,7 +156,7 @@ def guardrail_e_strategy_smoke():
     for strategy, label in [(0, "rand/1"), (1, "best/1"), (5, "basepbest50")]:
         pbest = 50 if strategy == 5 else 10
         loss = de_solve(
-            D, 32, 32, 30,
+            model.total_weights, 32, 32, 30,
             -5.0, 5.0,
             objective, 42,
             mutation_strategy=strategy,
@@ -176,16 +171,18 @@ def guardrail_e_strategy_smoke():
     print()
 
 
-def guardrail_f_c_oracle():
-    """C-oracle comparison (placeholder).
+def guardrail_f_structural():
+    """Structural determinism: forward pass consistency, pop vs individual.
 
-    Full C comparison requires fixture export from C side.
-    This is a structural test that the forward pass produces
-    identical results for identical weights and inputs.
+    This is NOT a C-numerical comparison.  Exact C comparison requires
+    an exported fixture from the C side (identical weights and inputs
+    in genann layout).  This test verifies that the PyTorch forward
+    pass is internally consistent: deterministic, matmul decomposition
+    matches MLP.forward, and population_forward matches per-individual.
     """
-    print("Guardrail F: C-oracle structural test")
+    print("Guardrail F: structural determinism tests")
 
-    # Test determinism: same weights + same inputs = same output
+    # Determinism: same weights + same inputs = same output
     model = mlp.MLP(2, 1, 12, 1)
     torch.manual_seed(12345)
     flat = torch.randn(model.total_weights) * 2
@@ -197,17 +194,17 @@ def guardrail_f_c_oracle():
     _check(torch.allclose(out1, out2, atol=1e-15),
            f"deterministic forward pass (max diff = {(out1 - out2).abs().max():.2e})")
 
-    # Test that unpack_flat followed by manual matmul matches forward
+    # Unpack_flat + manual matmul matches MLP.forward
     Ws, Bs = mlp.unpack_flat(flat, 2, 1, 12, 1)
     x = inputs
     for k in range(len(Ws) - 1):
-        x = torch.tanh(x @ Ws[k].T + Bs[k])
+        x = torch.sigmoid(x @ Ws[k].T + Bs[k])
     manual_out = x @ Ws[-1].T + Bs[-1]
 
     _check(torch.allclose(out1, manual_out, atol=1e-6),
            f"manual matmul matches MLP.forward (max diff = {(out1 - manual_out).abs().max():.2e})")
 
-    # Test population forward vs individual forward
+    # Population forward vs individual forward
     pop = torch.randn(8, model.total_weights)
     pop_preds = model.population_forward(pop, inputs)
     for i in range(8):
@@ -217,11 +214,8 @@ def guardrail_f_c_oracle():
                f"pop[{i}] matches individual forward (max diff = {diff:.2e})")
 
     print()
-    print("NOTE: Exact C-numerical comparison requires fixture export from C side.")
-    print("      Structural determinism and consistency verified.")
-
-
-import math
+    print("NOTE: Structural determinism verified. Not a C-numerical comparison.")
+    print("      C fixture export required for exact cross-harness validation.")
 
 
 def run_all():
@@ -236,7 +230,7 @@ def run_all():
     guardrail_c_trivial_sanity()
     guardrail_d_de_smoke()
     guardrail_e_strategy_smoke()
-    guardrail_f_c_oracle()
+    guardrail_f_structural()
 
     print("=" * 60)
     print("All guardrails passed.")

@@ -1,9 +1,13 @@
 """Benchmark runner for DE-trained NN experiments.
 
-Matches the C de_seq.c task configurations.
+Matches the C de_seq.c task configurations (same target functions,
+same architecture, same DE budgets).  Data draws are from independent
+RNG streams; exact numerical comparison with C requires a fixture export.
 """
 
+import argparse
 import math
+import sys
 import time
 
 import torch
@@ -38,13 +42,12 @@ def eval_budget(initial_popsize, min_popsize, generations):
 
 
 def target_variance(targets):
-    """Compute variance of target values for nMSE normalization."""
-    return float(torch.var(targets))
+    """Population variance of targets (matching C var/total, not sample var)."""
+    return float(torch.var(targets, correction=0))
 
 
 def mse_loss(predictions, targets):
     """MSE loss over all outputs. predictions: [P, S, O], targets: [S]"""
-    # targets: [S] -> [1, S, 1]
     t = targets.view(1, -1, 1)
     e = predictions - t
     return (e * e).mean(dim=(1, 2))  # [P]
@@ -180,11 +183,10 @@ def run_benchmark(name, runs=5, device="cpu", dtype=torch.float32,
     huber_delta = cfg["huber_delta"]
     bounds_min, bounds_max = cfg["bounds"]
 
-    model = mlp.MLP(n_dims, hidden_layers, hidden, outputs,
-                    activation=torch.tanh)
+    model = mlp.MLP(n_dims, hidden_layers, hidden, outputs)
     D = model.total_weights
 
-    # Generate data once (deterministic per task)
+    # Generate data once (deterministic per task, independent of C RNG)
     train_in, train_tgt = task_mod.generate_data(
         train_samples, n_dims, target_fn, device=device, dtype=dtype,
         seed=0xD1FF3A9E2B1C4D77)
@@ -192,8 +194,6 @@ def run_benchmark(name, runs=5, device="cpu", dtype=torch.float32,
         test_samples, n_dims, target_fn, device=device, dtype=dtype,
         seed=0x7E57C0FFEE5EED)
 
-    # also generate separate test data with a different seed for unbiased evaluation
-    # for now use same as train generation pattern in C
     test_var = target_variance(test_tgt)
 
     budget = eval_budget(popsize, min_popsize, generations)
@@ -201,11 +201,9 @@ def run_benchmark(name, runs=5, device="cpu", dtype=torch.float32,
     print(f"{name}: inputs={n_dims} hidden={hidden} outputs={outputs} "
           f"weights={D} pop={popsize}->{min_popsize} gens={generations} "
           f"evals/run={budget} runs={runs}")
-    print(f"  device={device} dtype={dtype}")
+    print(f"  device={device} dtype={dtype} activation=sigmoid "
+          f"(same target family, independent data draw vs C)")
     print(f"{'run':<5} {'loss':<14} {'ms':<10}")
-
-    # We need to pass n_dims, hidden_layers, hidden, outputs to the objective
-    # The objective receives a flat population tensor [P, D] and returns [P] losses
 
     def make_objective():
         return lambda pop: _compute_loss(
@@ -256,13 +254,6 @@ def run_benchmark(name, runs=5, device="cpu", dtype=torch.float32,
         train_pred = model.forward(best_weights, train_in)
         test_pred = model.forward(best_weights, test_in)
 
-        if loss_type == "huber":
-            train_loss = float(huber_loss(
-                train_pred.unsqueeze(0), train_tgt, huber_delta))
-        else:
-            train_loss = float(mse_loss(
-                train_pred.unsqueeze(0), train_tgt))
-
         test_mse = float(mse_loss(test_pred.unsqueeze(0), test_tgt))
         train_mse = float(mse_loss(train_pred.unsqueeze(0), train_tgt))
 
@@ -287,21 +278,91 @@ def run_benchmark(name, runs=5, device="cpu", dtype=torch.float32,
 
 
 def _compute_loss(pop, model, inputs, targets, loss_type, huber_delta=None):
-    """Objective function for DE: population -> per-member loss.
-
-    Args:
-        pop: [P, D] population tensor
-        model: MLP instance
-        inputs: [S, I]
-        targets: [S]
-        loss_type: "mse" or "huber"
-        huber_delta: delta for Huber loss
-
-    Returns:
-        [P] loss per population member
-    """
+    """Objective function for DE: population -> per-member loss."""
     preds = model.population_forward(pop, inputs)  # [P, S, O]
     if loss_type == "huber":
         return huber_loss(preds, targets, huber_delta)
     else:
         return mse_loss(preds, targets)
+
+
+def _main():
+    parser = argparse.ArgumentParser(
+        description="PyTorch DE benchmark runner")
+    parser.add_argument("benchmarks", nargs="*",
+                        help="Benchmark names to run, e.g. pair1 pair1-best1")
+    parser.add_argument("--device", default="cuda",
+                        help="Device: cuda or cpu (default: cuda)")
+    parser.add_argument("--dtype", default="float32",
+                        choices=["float32", "float64"],
+                        help="Tensor dtype (default: float32)")
+    parser.add_argument("--runs", type=int, default=5,
+                        help="Runs per benchmark (default: 5)")
+    parser.add_argument("--train-samples", type=int, default=512,
+                        help="Training samples (default: 512)")
+    parser.add_argument("--test-samples", type=int, default=256,
+                        help="Test samples (default: 256)")
+    parser.add_argument("--list", action="store_true",
+                        help="List available benchmarks and exit")
+    args = parser.parse_args()
+
+    if args.list:
+        print("Available benchmarks:")
+        for name in BENCHMARKS:
+            cfg = BENCHMARKS[name]
+            print(f"  {name:<32} strategy={cfg['strategy']} "
+                  f"loss={cfg['loss']} pop={cfg['popsize']}->{cfg['min_popsize']}")
+        return
+
+    if not args.benchmarks:
+        parser.print_help()
+        sys.exit(1)
+
+    dtype = torch.float64 if args.dtype == "float64" else torch.float32
+
+    unknown = [b for b in args.benchmarks if b not in BENCHMARKS]
+    if unknown:
+        print(f"Unknown benchmarks: {unknown}")
+        print(f"Available: {list(BENCHMARKS.keys())}")
+        sys.exit(1)
+
+    print("=" * 80)
+    print(f"PyTorch DE Benchmarks: device={args.device} dtype={args.dtype} "
+          f"runs={args.runs}")
+    print("=" * 80)
+    print()
+
+    all_results = []
+    total_wall = 0.0
+
+    for name in args.benchmarks:
+        t0 = time.time()
+        result = run_benchmark(name, runs=args.runs, device=args.device,
+                               dtype=dtype,
+                               train_samples=args.train_samples,
+                               test_samples=args.test_samples)
+        t1 = time.time()
+        w = (t1 - t0) * 1000
+        total_wall += w
+        all_results.append(result)
+
+    # Summary table
+    print()
+    print("=" * 80)
+    print("Summary")
+    print("=" * 80)
+    print(f'{"Task":<30} {"Train MSE":<14} {"Test MSE":<14} '
+          f'{"nMSE":<12} {"Wall (ms)":<12}')
+    print("-" * 82)
+    for r in all_results:
+        print(f'{r["name"]:<30} {r["train_mse"]:<14.8g} {r["test_mse"]:<14.8g} '
+              f'{r["test_nmse"]:<12.8g} {r["wall_ms"]:<12.0f}')
+    print("-" * 82)
+    print(f"Total wall: {total_wall:.0f}ms ({total_wall / 1000:.1f}s)")
+    print()
+    print("NOTE: Same target functions as C de_seq.c, independent data draws.")
+    print("      Not directly comparable to C leaderboard without fixture export.")
+
+
+if __name__ == "__main__":
+    _main()

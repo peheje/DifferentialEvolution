@@ -5,16 +5,17 @@ Matches C genann weight layout:
   For each output neuron: [-bias, w0, w1, ..., w_{prev-1}]
 
 The stored bias is negated; we undo the negation on extraction.
+
+Default hidden activation: sigmoid (matching C genann default).
 """
 
 import torch
 
 
 def _build_pack_index(inputs, hidden_layers, hidden, outputs):
-    """Pre-compute index tensors for fast unpacking from flat vectors.
+    """Pre-compute CPU index tensors for fast unpacking from flat vectors.
 
-    Returns (row_idx_l, col_idx_l, w_idx_l, bias_idx_l) per layer.
-    These index tensors live on CPU and are moved to device as needed.
+    Returns (row_idx_l, col_idx_l, w_idx_l, bias_idx_l) per layer on CPU.
     """
     row_idx_l = []
     col_idx_l = []
@@ -63,7 +64,33 @@ def _build_pack_index(inputs, hidden_layers, hidden, outputs):
     return row_idx_l, col_idx_l, w_idx_l, bias_idx_l
 
 
+# Cache: (arch, device) -> list of (r, c, wi, bi) tensors on that device
 _pack_cache: dict = {}
+
+
+def _get_pack_indices(inputs, hidden_layers, hidden, outputs, device):
+    """Get pack index tensors for an architecture, cached per device.
+
+    Returns (row_idx_l, col_idx_l, w_idx_l, bias_idx_l) as lists of tensors
+    on the requested device.
+    """
+    arch_key = (inputs, hidden_layers, hidden, outputs)
+    cache_key = (arch_key, device)
+    if cache_key not in _pack_cache:
+        if arch_key not in _pack_cache:
+            _pack_cache[arch_key] = _build_pack_index(
+                inputs, hidden_layers, hidden, outputs)
+        rl_cpu, cl_cpu, wl_cpu, bl_cpu = _pack_cache[arch_key]
+        if device == "cpu":
+            _pack_cache[cache_key] = (rl_cpu, cl_cpu, wl_cpu, bl_cpu)
+        else:
+            _pack_cache[cache_key] = (
+                [t.to(device) for t in rl_cpu],
+                [t.to(device) for t in cl_cpu],
+                [t.to(device) for t in wl_cpu],
+                [t.to(device) for t in bl_cpu],
+            )
+    return _pack_cache[cache_key]
 
 
 def unpack_flat(flat, inputs, hidden_layers, hidden, outputs):
@@ -72,25 +99,23 @@ def unpack_flat(flat, inputs, hidden_layers, hidden, outputs):
     For a single vector flat [D]: returns (Ws, Bs) lists.
     For batched flat [P, D]: returns (Ws, Bs) where Ws[k] is [P, out, in].
     """
-    cache_key = (inputs, hidden_layers, hidden, outputs)
-    if cache_key not in _pack_cache:
-        _pack_cache[cache_key] = _build_pack_index(
-            inputs, hidden_layers, hidden, outputs)
-
-    row_idx_l, col_idx_l, w_idx_l, bias_idx_l = _pack_cache[cache_key]
     device = flat.device
     dtype = flat.dtype
     batched = flat.dim() == 2
     P = flat.shape[0] if batched else 1
 
+    # Get cached indices on the right device
+    rl, cl, wl, bl = _get_pack_indices(
+        inputs, hidden_layers, hidden, outputs, str(device))
+
     Ws = []
     Bs = []
 
-    for layer_idx in range(len(row_idx_l)):
-        r = row_idx_l[layer_idx].to(device)
-        c = col_idx_l[layer_idx].to(device)
-        wi = w_idx_l[layer_idx].to(device)
-        bi = bias_idx_l[layer_idx].to(device)
+    for layer_idx in range(len(rl)):
+        r = rl[layer_idx]
+        c = cl[layer_idx]
+        wi = wl[layer_idx]
+        bi = bl[layer_idx]
 
         n_out = int(r.max().item()) + 1
         n_in = int(c.max().item()) + 1
@@ -111,7 +136,10 @@ def unpack_flat(flat, inputs, hidden_layers, hidden, outputs):
 
 
 class MLP:
-    """Flat-parameter MLP matching C genann behavior."""
+    """Flat-parameter MLP matching C genann behavior.
+
+    Default hidden activation is sigmoid (matching C genann default).
+    """
 
     def __init__(self, inputs, hidden_layers, hidden, outputs,
                  activation=None):
@@ -119,7 +147,7 @@ class MLP:
         self.hidden_layers = hidden_layers
         self.hidden = hidden
         self.outputs = outputs
-        self.activation = activation if activation is not None else torch.tanh
+        self.activation = activation if activation is not None else torch.sigmoid
 
         n = 0
         for h in range(hidden_layers):
