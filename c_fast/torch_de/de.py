@@ -127,6 +127,9 @@ def de_solve(
     CRi = torch.from_numpy(
         rng.uniform(0.0, 1.0, size=P)).to(dtype=dtype, device=device)
 
+    # Seed torch RNG for GPU-side random generation (crossover/jrand)
+    torch.manual_seed(int(seed))
+
     # Evaluate initial population
     scores = objective_fn(pop)
 
@@ -144,19 +147,14 @@ def de_solve(
         if mutation_strategy == 5:
             pbest_count = max(1, (active * pbest_percent + 99) // 100)
 
-        # === jDE parameter re-sampling: produce Fi_try, CRi_try ===
-        Fi_np = Fi.cpu().numpy().copy()
-        CRi_np = CRi.cpu().numpy().copy()
-
-        re_F = rng.random(active) < JDE_TAU_F
-        re_CR = rng.random(active) < JDE_TAU_CR
-        if re_F.any():
-            Fi_np[re_F] = rng.uniform(JDE_F_LO, JDE_F_HI, size=re_F.sum())
-        if re_CR.any():
-            CRi_np[re_CR] = rng.uniform(0.0, 1.0, size=re_CR.sum())
-
-        Fi_try = torch.from_numpy(Fi_np).to(dtype=dtype, device=device)
-        CRi_try = torch.from_numpy(CRi_np).to(dtype=dtype, device=device)
+        # === jDE parameter re-sampling (GPU-side, sync-free) ===
+        new_F = JDE_F_LO + torch.rand(active, device=device, dtype=dtype) * (
+            JDE_F_HI - JDE_F_LO)
+        new_CR = torch.rand(active, device=device, dtype=dtype)
+        re_F = torch.rand(active, device=device) < JDE_TAU_F
+        re_CR = torch.rand(active, device=device) < JDE_TAU_CR
+        Fi_try = torch.where(re_F, new_F, Fi)
+        CRi_try = torch.where(re_CR, new_CR, CRi)
 
         # === generate mutation indices (vectorized) ===
         if mutation_strategy == 0:
@@ -213,16 +211,12 @@ def de_solve(
         # === mutation (vectorized) ===
         mutant = base + Fi_try.unsqueeze(1) * diff  # [P, D]
 
-        # === binomial crossover (vectorized) ===
-        cross_rand = torch.from_numpy(
-            rng.random((active, D)).astype(np.float32)
-        ).to(dtype=dtype, device=device)
+        # === binomial crossover (GPU-side random) ===
+        cross_rand = torch.rand(active, D, dtype=dtype, device=device)
         cross_mask = cross_rand < CRi_try.unsqueeze(1)  # [P, D]
 
-        # forced jrand
-        jrand_vals = torch.from_numpy(
-            rng.integers(0, D, size=active)
-        ).to(device=device)
+        # forced jrand (GPU-side)
+        jrand_vals = torch.randint(0, D, (active,), device=device)
         cross_mask[torch.arange(active, device=device), jrand_vals] = True
 
         # trial = parent for dimensions not crossed, mutant for crossed

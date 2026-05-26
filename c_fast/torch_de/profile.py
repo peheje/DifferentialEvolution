@@ -44,6 +44,8 @@ def de_solve_instrumented(
     CRi = torch.from_numpy(
         rng.uniform(0.0, 1.0, size=P)).to(dtype=dtype, device=device)
 
+    torch.manual_seed(int(seed))
+
     scores = objective_fn(pop)
 
     # Cumulative timers
@@ -70,20 +72,14 @@ def de_solve_instrumented(
         if mutation_strategy == 5:
             pbest_count = max(1, (active * pbest_percent + 99) // 100)
 
-        # --- jDE update ---
+        # --- jDE update (GPU-side, sync-free) ---
         t0 = time.perf_counter()
-        Fi_np = Fi.cpu().numpy().copy()
-        CRi_np = CRi.cpu().numpy().copy()
-
-        re_F = rng.random(active) < 0.1
-        re_CR = rng.random(active) < 0.1
-        if re_F.any():
-            Fi_np[re_F] = rng.uniform(0.1, 0.9, size=re_F.sum())
-        if re_CR.any():
-            CRi_np[re_CR] = rng.uniform(0.0, 1.0, size=re_CR.sum())
-
-        Fi_try = torch.from_numpy(Fi_np).to(dtype=dtype, device=device)
-        CRi_try = torch.from_numpy(CRi_np).to(dtype=dtype, device=device)
+        new_F = 0.1 + torch.rand(active, device=device, dtype=dtype) * 0.8
+        new_CR = torch.rand(active, device=device, dtype=dtype)
+        re_F = torch.rand(active, device=device) < 0.1
+        re_CR = torch.rand(active, device=device) < 0.1
+        Fi_try = torch.where(re_F, new_F, Fi)
+        CRi_try = torch.where(re_CR, new_CR, CRi)
         if torch.cuda.is_available():
             torch.cuda.synchronize()
         t_jde += time.perf_counter() - t0
@@ -139,13 +135,10 @@ def de_solve_instrumented(
 
         mutant = base + Fi_try.unsqueeze(1) * diff
 
-        cross_rand = torch.from_numpy(
-            rng.random((active, D)).astype(np.float32)
-        ).to(dtype=dtype, device=device)
+        cross_rand = torch.rand(active, D, dtype=dtype, device=device)
         cross_mask = cross_rand < CRi_try.unsqueeze(1)
 
-        jrand_vals = torch.from_numpy(
-            rng.integers(0, D, size=active)).to(device=device)
+        jrand_vals = torch.randint(0, D, (active,), device=device)
         cross_mask[torch.arange(active, device=device), jrand_vals] = True
 
         trials = torch.where(cross_mask, mutant, pop)
