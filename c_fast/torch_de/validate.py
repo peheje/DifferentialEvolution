@@ -179,6 +179,9 @@ def guardrail_g_pick_indices():
 
     from .de import _pick_all_indices
 
+    # Negative tests first: prove the validator catches known-bad arrays
+    _check_negative()
+
     P_sizes = [4, 5, 8, 32, 768]
     n_picks = [2, 3]
     seeds = list(range(50))
@@ -186,48 +189,70 @@ def guardrail_g_pick_indices():
     for P in P_sizes:
         for n in n_picks:
             if n >= P:
-                continue  # can't pick n distinct from P if n >= P
+                continue
             for seed in seeds:
                 rng = np.random.Generator(np.random.PCG64(seed))
 
-                # Without extra_exclude
+                # No extra_exclude: feasible when n < P
                 idx = _pick_all_indices(rng, P, n, None)
-                _check(_validate_pick_indices(idx, P, n, None),
-                       f"P={P} n={n} seed={seed} (no extra)")
+                ok, detail = _validate_pick_indices(idx, P, n, None)
+                _check(ok, f"P={P} n={n} seed={seed} (no extra): {detail}")
 
-                # With extra_exclude (random array)
-                extra = rng.integers(0, P, size=P).astype(np.int32)
-                # Ensure extra[i] != i for at least some rows to stress-test
-                idx2 = _pick_all_indices(rng, P, n, extra)
-                _check(_validate_pick_indices(idx2, P, n, extra),
-                       f"P={P} n={n} seed={seed} (with extra)")
+                # With extra_exclude: feasible when n <= P-2 (random extra
+                # has rows with extra[i] != i, leaving P-2 valid values)
+                if n <= P - 2:
+                    extra = rng.integers(0, P, size=P).astype(np.int32)
+                    idx2 = _pick_all_indices(rng, P, n, extra)
+                    ok2, detail2 = _validate_pick_indices(idx2, P, n, extra)
+                    _check(ok2, f"P={P} n={n} seed={seed} (with extra): {detail2}")
 
     print()
 
 
+def _check_negative():
+    """Intentional malformed indices — verify validator rejects them."""
+    P, n = 8, 3
+
+    # Self-pick: set row 0 column 0 to its row index
+    idx = np.arange(P * n, dtype=np.int32).reshape(P, n) % P
+    idx[0, 0] = 0
+    ok, detail = _validate_pick_indices(idx, P, n, None)
+    _check(not ok, f"negative: self-pick rejected ({detail})")
+
+    # Extra-exclude match: extra[0]=5, set col 1 = 5
+    idx = np.arange(P * n, dtype=np.int32).reshape(P, n) % P
+    idx[0, 1] = 5
+    extra = np.full(P, 5, dtype=np.int32)
+    ok, detail = _validate_pick_indices(idx, P, n, extra)
+    _check(not ok, f"negative: extra-exclude rejected ({detail})")
+
+    # Duplicate within row: col 2 = col 0 on row 0
+    idx = np.arange(P * n, dtype=np.int32).reshape(P, n) % P
+    idx[0, 2] = idx[0, 0]
+    ok, detail = _validate_pick_indices(idx, P, n, None)
+    _check(not ok, f"negative: duplicate rejected ({detail})")
+
+
 def _validate_pick_indices(idx, P, n_pick, extra_exclude_arr):
-    """Return True if idx passes all invariants, else a string describing the failure."""
+    """Return (ok, reason) tuple. ok is bool, reason is empty on success."""
     row_idx = np.arange(P, dtype=np.int32)
 
     for k in range(n_pick):
-        # No self-pick
         if (idx[:, k] == row_idx).any():
             bad = np.where(idx[:, k] == row_idx)[0]
-            return f"col {k}: self-pick at rows {bad[:5].tolist()}"
+            return False, f"col {k}: self-pick at rows {bad[:5].tolist()}"
 
-        # No extra-exclude match
         if extra_exclude_arr is not None:
             if (idx[:, k] == extra_exclude_arr).any():
                 bad = np.where(idx[:, k] == extra_exclude_arr)[0]
-                return f"col {k}: extra-exclude match at rows {bad[:5].tolist()}"
+                return False, f"col {k}: extra-exclude match at rows {bad[:5].tolist()}"
 
-        # No duplicates against earlier columns
         for prev_k in range(k):
             if (idx[:, k] == idx[:, prev_k]).any():
                 bad = np.where(idx[:, k] == idx[:, prev_k])[0]
-                return f"col {k}: dup with col {prev_k} at rows {bad[:5].tolist()}"
+                return False, f"col {k}: dup with col {prev_k} at rows {bad[:5].tolist()}"
 
-    return True
+    return True, ""
 
 
 def guardrail_f_structural():

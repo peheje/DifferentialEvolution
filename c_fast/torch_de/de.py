@@ -44,30 +44,28 @@ def _pick_all_indices(rng, P, n_pick, extra_exclude_arr=None):
     row_idx = np.arange(P, dtype=np.int32)
 
     for k in range(n_pick):
-        # Exclude self
-        mask = idx[:, k] == row_idx
+        mask = _invalid_mask(idx, k, row_idx, extra_exclude_arr)
+        iters = 0
         while mask.any():
+            if iters >= 1000:
+                raise RuntimeError(
+                    f"_pick_all_indices: failed to converge for col {k}, "
+                    f"P={P} n_pick={n_pick} remaining={mask.sum()}")
             idx[mask, k] = rng.integers(0, P, size=mask.sum()).astype(np.int32)
-            mask = idx[:, k] == row_idx
-
-        # Exclude extra per row
-        if extra_exclude_arr is not None:
-            mask = idx[:, k] == extra_exclude_arr
-            while mask.any():
-                idx[mask, k] = rng.integers(0, P, size=mask.sum()).astype(np.int32)
-                mask = (idx[:, k] == extra_exclude_arr) | (idx[:, k] == row_idx)
-
-        # Exclude duplicates against all earlier columns
-        for prev_k in range(k):
-            mask = idx[:, k] == idx[:, prev_k]
-            while mask.any():
-                idx[mask, k] = rng.integers(0, P, size=mask.sum()).astype(np.int32)
-                mask = idx[:, k] == idx[:, prev_k]
-                mask |= (idx[:, k] == row_idx)
-                if extra_exclude_arr is not None:
-                    mask |= (idx[:, k] == extra_exclude_arr)
+            mask = _invalid_mask(idx, k, row_idx, extra_exclude_arr)
+            iters += 1
 
     return idx
+
+
+def _invalid_mask(idx, k, row_idx, extra_exclude_arr):
+    """Return boolean mask [P]: rows where column k violates any invariant."""
+    mask = idx[:, k] == row_idx  # self-pick
+    if extra_exclude_arr is not None:
+        mask |= (idx[:, k] == extra_exclude_arr)
+    for prev_k in range(k):
+        mask |= (idx[:, k] == idx[:, prev_k])
+    return mask
 
 
 def de_solve(
