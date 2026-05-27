@@ -5,7 +5,7 @@ It compares, under a hard wall-clock cap:
 
   - Adam-only
   - DE-only basepbest50
-  - DE basepbest50 + K Adam polish steps on every trial population
+  - DE basepbest50 + K Adam polish steps on the top-Q trial population
 
 The default task is pair5-hard with a 5->64->1 sigmoid MLP.
 """
@@ -148,7 +148,8 @@ def run_adam_only(task, arch, train_in, train_tgt, test_in, test_tgt,
 
 def run_de_memetic(task, arch, train_in, train_tgt, test_in, test_tgt,
                    test_var, wall_s, seed, device, dtype, polish_steps,
-                   polish_lr, popsize, min_popsize, pbest_percent):
+                   polish_top_q, polish_lr, popsize, min_popsize,
+                   pbest_percent):
     rng = np.random.Generator(np.random.PCG64(seed))
     torch.manual_seed(int(seed))
 
@@ -177,6 +178,7 @@ def run_de_memetic(task, arch, train_in, train_tgt, test_in, test_tgt,
 
     start = time.perf_counter()
     trial_evals = P
+    polished_evals = 0
 
     while True:
         elapsed = time.perf_counter() - start
@@ -219,16 +221,27 @@ def run_de_memetic(task, arch, train_in, train_tgt, test_in, test_tgt,
         cross_mask[torch.arange(active, device=device), jrand_vals] = True
         trials = torch.where(cross_mask, mutant, pop).clamp_(-5.0, 5.0)
 
-        if polish_steps > 0:
-            # Avoid starting a polish pass if the wall clock is already gone.
-            if time.perf_counter() - start >= wall_s:
-                break
-            trials = adam_polish_population(
-                trials, model, train_in, train_tgt, polish_steps, polish_lr
-            )
-
         trial_scores = pop_loss(trials, model, train_in, train_tgt)
         trial_evals += active
+
+        if polish_steps > 0 and polish_top_q > 0:
+            # Polish only promising trials, then keep polished candidates only
+            # when their train loss beats the unpolished trial loss.
+            if time.perf_counter() - start >= wall_s:
+                break
+            q = min(polish_top_q, active)
+            top_trial_idx = torch.argsort(trial_scores)[:q]
+            polished = adam_polish_population(
+                trials[top_trial_idx], model, train_in, train_tgt,
+                polish_steps, polish_lr
+            )
+            polished_scores = pop_loss(polished, model, train_in, train_tgt)
+            polished_evals += q * polish_steps
+            better_polished = polished_scores < trial_scores[top_trial_idx]
+            if better_polished.any():
+                replace_idx = top_trial_idx[better_polished]
+                trials[replace_idx] = polished[better_polished]
+                trial_scores[replace_idx] = polished_scores[better_polished]
 
         improved = trial_scores < scores
         improved_idx = improved.nonzero(as_tuple=False).squeeze(-1)
@@ -264,13 +277,17 @@ def run_de_memetic(task, arch, train_in, train_tgt, test_in, test_tgt,
         torch.cuda.synchronize()
     elapsed = time.perf_counter() - start
     return {
-        "method": f"de+adam{polish_steps}" if polish_steps else "de",
+        "method": (
+            f"de+adam{polish_steps}top{polish_top_q}"
+            if polish_steps and polish_top_q else "de"
+        ),
         "train_mse": best_train,
         "test_mse": best_test,
         "nmse": best_test / test_var,
         "wall_s": elapsed,
         "generations": generation,
         "candidate_evals": trial_evals,
+        "polished_evals": polished_evals,
         "best_generation": best_generation,
         "evals_per_sec": trial_evals / elapsed if elapsed > 0 else float("inf"),
     }
@@ -296,7 +313,8 @@ def run_suite(args):
         methods.append(("de", 0))
     if args.methods in ("all", "hybrid"):
         for k in args.polish_steps:
-            methods.append(("hybrid", k))
+            for q in args.polish_top_q:
+                methods.append(("hybrid", (k, q)))
 
     print("=" * 88)
     print("Memetic DE Experiment")
@@ -316,11 +334,13 @@ def run_suite(args):
                 device, dtype,
             )
         else:
+            polish_steps = k[0] if isinstance(k, tuple) else k
+            polish_top_q = k[1] if isinstance(k, tuple) else args.polish_top_q[0]
             row = run_de_memetic(
                 args.task, arch, train_in, train_tgt, test_in, test_tgt,
                 test_var, args.wall_seconds, args.seed, device, dtype,
-                k, args.polish_lr, args.popsize, args.min_popsize,
-                args.pbest_percent,
+                polish_steps, polish_top_q, args.polish_lr, args.popsize,
+                args.min_popsize, args.pbest_percent,
             )
         rows.append(row)
         print_row(row)
@@ -348,7 +368,8 @@ def print_row(row):
         print(f"{row['method']}: train={row['train_mse']:.6g} "
               f"test={row['test_mse']:.6g} nMSE={row['nmse']:.6g} "
               f"wall={row['wall_s']:.2f}s gens={row['generations']} "
-              f"evals={row['candidate_evals']} best_gen={row['best_generation']}")
+              f"evals={row['candidate_evals']} polished={row['polished_evals']} "
+              f"best_gen={row['best_generation']}")
 
 
 def _main():
@@ -362,7 +383,8 @@ def _main():
     parser.add_argument("--test-samples", type=int, default=256)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--methods", default="all", choices=["all", "adam", "de", "hybrid"])
-    parser.add_argument("--polish-steps", type=int, nargs="+", default=[1, 5])
+    parser.add_argument("--polish-steps", type=int, nargs="+", default=[5])
+    parser.add_argument("--polish-top-q", type=int, nargs="+", default=[8, 16])
     parser.add_argument("--adam-lr", type=float, default=3e-3)
     parser.add_argument("--polish-lr", type=float, default=1e-3)
     parser.add_argument("--popsize", type=int, default=384)

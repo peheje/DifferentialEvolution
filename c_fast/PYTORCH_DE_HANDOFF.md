@@ -52,7 +52,49 @@ Interpretation:
 - If hybrid evolution remains interesting, the next version should polish only
   a small selected subset of trials/elites, not the whole population.
 
-PICKUP: Do not continue with "Adam polish every trial" as the hybrid design.
-Try "DE proposes many -> polish top q trials/elites -> select" only if we still
-want a memetic route. For smooth supervised tasks, Adam remains the baseline to
-beat by wall-clock and test MSE.
+## Selective top-Q Adam polish
+
+Updated `torch_de.memetic_experiment` so DE first evaluates all unpolished
+trials, then polishes only the top-Q trials by train loss. The polished trial is
+kept only if it improves over the unpolished trial. This preserves broad DE
+exploration while spending gradient work only on promising candidates.
+
+Command:
+
+```bash
+.venv/bin/python -m torch_de.memetic_experiment \
+  --device cuda \
+  --wall-seconds 60 \
+  --methods all \
+  --polish-steps 5 \
+  --polish-top-q 8 16 \
+  --task pair5-hard \
+  --arch 5,64,1 \
+  --popsize 384 \
+  --min-popsize 192 \
+  --adam-lr 0.003 \
+  --polish-lr 0.001
+```
+
+Results:
+
+| Method | Train MSE | Test MSE | nMSE | Wall | Work |
+|---|---:|---:|---:|---:|---:|
+| Adam | 3.38e-05 | 0.00159 | 0.00120 | 60.0s | 114,623 steps |
+| DE basepbest50 | 0.00130 | 0.0398 | 0.0300 | 60.0s | 8,830,752 candidate evals |
+| DE + Adam polish top 8 | 0.00299 | 0.0972 | 0.0734 | 60.0s | 2,801,112 candidate evals + 358,800 polish evals |
+| DE + Adam polish top 16 | 0.00128 | 0.0200 | 0.0151 | 60.0s | 2,716,452 candidate evals + 689,760 polish evals |
+
+Interpretation:
+
+- Selective top-16 polishing is much better than polishing every trial and
+  improves over DE-only on test MSE by about 2x.
+- Top-8 is too narrow/noisy in this run and hurts generalization.
+- Adam-only still dominates by a large margin on this smooth supervised task.
+- The hybrid idea has some signal, but not enough to justify more work on this
+  task unless the objective becomes less gradient-friendly.
+
+PICKUP: Top-Q polishing is the right memetic shape if we continue hybrids:
+`DE proposes many -> polish top q trials -> select`. On `pair5-hard 5->64->1`,
+`q=16,k=5` helps DE but remains far behind Adam. Next hybrid work should move
+to non-smooth/rollout/sparse-reward objectives, not smooth MSE regression.
