@@ -219,8 +219,48 @@ Interpretation:
 - The per-neuron block idea, where semantically related parameters are mutated
   together, is not explored here but might behave differently.
 
-PICKUP: Block-wise DE in all tested forms (contiguous 3-50% blocks,
-per-neuron blocks, adaptive sizing) is ~80x worse than full-vector DE on
-NN weight optimization. NN weights are too tightly coupled for coordinate-
-descent-style block mutation. Future DE work should target non-
-differentiable/noisy objectives where gradient signal is unavailable.
+## Block-wise DE final sweep
+
+Ran 15 block variants × 2 seeds × 60s wall-clock (+ 10s elimination pass).
+All variants use basepbest50, same population budget as full DE.
+
+Command:
+```bash
+.venv/bin/python -m torch_de.block_de_experiment --device cuda --phase full --extra-seeds
+.venv/bin/python -m torch_de.block_de_experiment --device cuda --phase quick
+```
+
+Final results (60s, pair5-hard 5->64->1, best-of-2-seeds):
+
+| Method | Test MSE | nMSE | vs Full |
+|---|---:|---:|---:|
+| DE full | 0.0318 | 0.0240 | 1.0x |
+| DE layer-block | 2.74 | 2.07 | 86x |
+| DE occasional-full-112 | 3.42 | 2.58 | 108x |
+| DE adaptive (75%→25%) | 3.52 | 2.66 | 111x |
+| DE block-32 | 3.79 | 2.86 | 119x |
+| DE block-224 | 4.14 | 3.12 | 130x |
+| DE neuron-block | 4.23 | 3.19 | 133x |
+| DE block-64 | 4.42 | 3.34 | 139x |
+| DE block-112 | 4.60 | 3.47 | 145x |
+| DE mixed (32/112/224/full) | 4.97 | 3.75 | 157x |
+| DE block-336 | 5.37 | 4.05 | 169x |
+| DE random-index-112 | 6.02 | 4.54 | 190x |
+| DE block-224-slice | 6.47 | 4.88 | 204x |
+| DE mixed-slice | 7.33 | 5.53 | 231x |
+| DE block-112-slice | 7.47 | 5.64 | 235x |
+| Adam | 0.00155 | 0.00117 | — |
+
+Conclusion: Every localized/block/slice DE variant is 86-235x worse than
+full-vector DE on this NN regression task. The parameter couplings are
+too strong for coordinate-descent-style block mutation. DE's differential
+mutation `x_base + F*(x_r1 - x_r2)` only works when it operates on the
+full correlated parameter vector.
+
+The "smaller experiments give DE better signal" hypothesis is falsified
+for random/local parameter subsets on coupled NN weights.
+
+PICKUP: Block-wise DE is not useful for NN weight optimization. DE works
+best as a full-vector optimizer on this problem class. Future DE research
+should target non-differentiable/noisy objectives where gradient signal
+is unavailable, not attempt to decompose the DE mutation operator.
