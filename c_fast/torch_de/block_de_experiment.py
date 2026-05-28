@@ -58,18 +58,64 @@ def pop_loss_obj(pop, model, train_in, train_tgt):
     return mse_loss(model.population_forward(pop, train_in), train_tgt)
 
 
-# ── block mask helper ───────────────────────────────────────────────
+# ── block mask helpers ───────────────────────────────────────────────
 
 def _gen_block_mask(active, D, block_size, device):
-    """Generate [active, D] bool mask with one random contiguous block per row."""
+    """[active, D] bool mask with one random contiguous block per row.
+
+    Returns (mask, offsets) where offsets is [active] tensor of block start indices.
+    """
     if block_size <= 0 or block_size >= D:
-        return None
+        return None, None
     offsets = torch.randint(0, D - block_size + 1, (active,), device=device)
     mask = torch.zeros(active, D, dtype=torch.bool, device=device)
     idx_d = torch.arange(block_size, device=device)
     mask[torch.arange(active, device=device).unsqueeze(1),
-         (offsets.unsqueeze(1) + idx_d).clamp(0, D - 1)] = True
-    return mask
+         (offsets.unsqueeze(1) + idx_d)] = True
+    return mask, offsets
+
+
+def _gen_neuron_block_mask(active, D, neuron_params, device):
+    """Per-neuron blocks for genann layout.
+
+    neuron_params: (n_neurons, params_per_hidden_neuron) e.g. (64, 6)
+        where params_per_hidden_neuron = bias + input_weights
+
+    Returns (mask, offsets) where mask[i] selects one random neuron's block.
+    Block includes: hidden bias+weights + corresponding output weight (+
+    output bias when neuron 0 is selected).
+    """
+    n_neurons, pn = neuron_params
+    block_size = pn + 1  # hidden params + 1 output weight
+    neuron_idx = torch.randint(0, n_neurons, (active,), device=device)
+
+    mask = torch.zeros(active, D, dtype=torch.bool, device=device)
+    row_idx = torch.arange(active, device=device)
+
+    for j in range(pn):
+        col = neuron_idx * pn + j
+        mask[row_idx, col] = True
+
+    # Output weight: position = hidden_total + 1 + neuron_idx
+    output_weight_col = n_neurons * pn + 1 + neuron_idx
+    mask[row_idx, output_weight_col] = True
+
+    # Output bias as a bonus when block includes neuron 0
+    output_bias_col = n_neurons * pn
+    mask[neuron_idx == 0, output_bias_col] = True
+
+    # Return flat param offset for jrand: start of hidden params for this neuron
+    flat_offsets = neuron_idx * pn
+    return mask, flat_offsets
+
+
+def _gen_adaptive_block_size(D, generation, total_generations, min_frac=0.125):
+    """Block size shrinks from D/2 to D*min_frac over total_generations."""
+    if total_generations <= 0:
+        return max(int(D * min_frac), 1)
+    t = min(generation / total_generations, 1.0)
+    frac = 0.5 - t * (0.5 - min_frac)
+    return max(int(D * frac), 1)
 
 
 # ── slice-aware scoring ─────────────────────────────────────────────
@@ -100,7 +146,8 @@ def _slice_scores(trials, model, train_in, train_tgt, best_weights,
 def run_de_wallclock(model, D, train_in, train_tgt, test_in, test_tgt,
                      test_var, wall_s, seed, device, dtype,
                      block_size=0, slice_scoring=False,
-                     popsize=384, min_popsize=192, pbest_percent=50):
+                     popsize=384, min_popsize=192, pbest_percent=50,
+                     neuron_blocks=False, adaptive_block=False):
     """Run DE until wall clock expires. Returns best metrics dict."""
     rng = np.random.Generator(np.random.PCG64(seed))
     torch.manual_seed(int(seed) & 0x7FFF_FFFF_FFFF_FFFF)
@@ -119,6 +166,15 @@ def run_de_wallclock(model, D, train_in, train_tgt, test_in, test_tgt,
     best_train, best_test = eval_single(
         model, best_weights, train_in, train_tgt, test_in, test_tgt)
     best_generation = 0
+
+    # Pre-compute neuron block params for genann 5->64->1 layout
+    neuron_params = None
+    if neuron_blocks:
+        pn = model.inputs + 1  # bias + input weights per hidden neuron
+        n_neurons = model.hidden
+        output_params = model.outputs * (1 + model.hidden)
+        if pn * n_neurons + output_params == D:
+            neuron_params = (n_neurons, pn)
 
     start = time.perf_counter()
     trial_evals = P
@@ -159,13 +215,29 @@ def run_de_wallclock(model, D, train_in, train_tgt, test_in, test_tgt,
 
         mutant = pop[pb_t] + Fi_try.unsqueeze(1) * (pop[r1_t] - pop[r2_t])
         cross_mask = torch.rand(active, D, dtype=dtype, device=device) < CRi_try.unsqueeze(1)
-        jrand_vals = torch.randint(0, D, (active,), device=device)
-        cross_mask[torch.arange(active, device=device), jrand_vals] = True
         trials = torch.where(cross_mask, mutant, pop)
 
-        # Block mask: constrain mutation to one random block per trial
-        block_mask = _gen_block_mask(active, D, block_size, device)
+        # Block mask
+        bs = block_size
+        if adaptive_block:
+            bs = _gen_adaptive_block_size(D, generation, 0, min_frac=0.125)
+
+        if neuron_blocks and neuron_params is not None:
+            block_mask, block_offsets = _gen_neuron_block_mask(
+                active, D, neuron_params, device)
+            block_jrand_range = neuron_params[1]  # hidden bias+weights (contiguous part)
+        else:
+            block_mask, block_offsets = _gen_block_mask(active, D, bs, device)
+            block_jrand_range = bs
+
         if block_mask is not None:
+            # Fix jrand: force one dimension inside the block
+            if block_offsets is not None and block_jrand_range > 0:
+                jrand_vals = block_offsets + torch.randint(
+                    0, block_jrand_range, (active,), device=device)
+                jrand_vals = jrand_vals.clamp(0, D - 1)
+                cross_mask[torch.arange(active, device=device), jrand_vals] = True
+            # Constrain mutation to block
             trials = torch.where(block_mask, trials, pop)
 
         trials = trials.clamp_(-5.0, 5.0)
@@ -203,10 +275,14 @@ def run_de_wallclock(model, D, train_in, train_tgt, test_in, test_tgt,
     elapsed = time.perf_counter() - start
 
     label = "DE full"
-    if block_size > 0:
+    if neuron_blocks:
+        label = "DE neuron-block"
+    elif adaptive_block:
+        label = "DE block-adaptive"
+    elif block_size > 0:
         label = f"DE block-{block_size}"
-        if slice_scoring:
-            label += " slice"
+    if slice_scoring:
+        label += " slice"
     return {
         "method": label,
         "train_mse": best_train,
@@ -283,7 +359,12 @@ def _main():
     parser.add_argument("--test-samples", type=int, default=256)
     parser.add_argument("--popsize", type=int, default=384)
     parser.add_argument("--min-popsize", type=int, default=192)
-    parser.add_argument("--block-sizes", type=int, nargs="+", default=[16, 32, 64])
+    parser.add_argument("--block-sizes", type=int, nargs="+",
+                        default=[112, 224])
+    parser.add_argument("--neuron-blocks", action="store_true",
+                        help="Use per-neuron blocks (genann layout)")
+    parser.add_argument("--adaptive-block", action="store_true",
+                        help="Adaptive block size (D/2 -> D/8)")
     parser.add_argument("--adam-lr", type=float, default=0.003)
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--no-adam", action="store_true")
@@ -336,16 +417,25 @@ def _main():
             print(f"  block-{bs}: gen={r['generations']} train={r['train_mse']:.4g} "
                   f"test={r['test_mse']:.4g} ok={math.isfinite(r['test_mse'])}")
 
-        if not args.no_slice:
-            for bs in args.block_sizes:
-                print(f"Smoke block-{bs}-slice...")
-                r = run_de_wallclock(
-                    model, D, train_in, train_tgt, test_in, test_tgt, test_var,
-                    wall_s, 42, device, dtype, block_size=bs, slice_scoring=True,
-                    popsize=popsize_smoke, min_popsize=minpop_smoke)
-                print(f"  block-{bs}-slice: gen={r['generations']} "
-                      f"train={r['train_mse']:.4g} test={r['test_mse']:.4g} "
-                      f"ok={math.isfinite(r['test_mse'])}")
+        if args.neuron_blocks:
+            print("Smoke neuron-block...")
+            r = run_de_wallclock(
+                model, D, train_in, train_tgt, test_in, test_tgt, test_var,
+                wall_s, 42, device, dtype, neuron_blocks=True,
+                popsize=popsize_smoke, min_popsize=minpop_smoke)
+            print(f"  neuron-block: gen={r['generations']} "
+                  f"train={r['train_mse']:.4g} test={r['test_mse']:.4g} "
+                  f"ok={math.isfinite(r['test_mse'])}")
+
+        if args.adaptive_block:
+            print("Smoke adaptive-block...")
+            r = run_de_wallclock(
+                model, D, train_in, train_tgt, test_in, test_tgt, test_var,
+                wall_s, 42, device, dtype, adaptive_block=True,
+                popsize=popsize_smoke, min_popsize=minpop_smoke)
+            print(f"  adaptive-block: gen={r['generations']} "
+                  f"train={r['train_mse']:.4g} test={r['test_mse']:.4g} "
+                  f"ok={math.isfinite(r['test_mse'])}")
 
         print("\nSMOKE PASS")
         return
@@ -384,7 +474,31 @@ def _main():
               f"train={r['train_mse']:.4g} test={r['test_mse']:.4g} "
               f"nMSE={r['nmse']:.4g}\n")
 
-    # Block-wise DE + slice scoring
+    # Neuron-block DE
+    if args.neuron_blocks:
+        print("Running neuron-block DE...")
+        r = run_de_wallclock(
+            model, D, train_in, train_tgt, test_in, test_tgt, test_var,
+            wall_s, 0, device, dtype, neuron_blocks=True,
+            popsize=args.popsize, min_popsize=args.min_popsize)
+        results.append(r)
+        print(f"  {r['method']}: gen={r['generations']} evals={r['trial_evals']} "
+              f"train={r['train_mse']:.4g} test={r['test_mse']:.4g} "
+              f"nMSE={r['nmse']:.4g}\n")
+
+    # Adaptive-block DE
+    if args.adaptive_block:
+        print("Running adaptive-block DE...")
+        r = run_de_wallclock(
+            model, D, train_in, train_tgt, test_in, test_tgt, test_var,
+            wall_s, 0, device, dtype, adaptive_block=True,
+            popsize=args.popsize, min_popsize=args.min_popsize)
+        results.append(r)
+        print(f"  {r['method']}: gen={r['generations']} evals={r['trial_evals']} "
+              f"train={r['train_mse']:.4g} test={r['test_mse']:.4g} "
+              f"nMSE={r['nmse']:.4g}\n")
+
+    # Block-wise DE + slice scoring (larger blocks only)
     if not args.no_slice:
         for bs in args.block_sizes:
             print(f"Running block-{bs} slice...")
