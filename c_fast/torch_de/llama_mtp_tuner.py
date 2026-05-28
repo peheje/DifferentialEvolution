@@ -132,12 +132,6 @@ def start_server(params_vec):
     fit_target = int(xs[9])
     batch_size = int(xs[10]); ubatch_size = int(xs[11])
 
-    # Enforce constraints
-    if ngram_min >= ngram_max:
-        ngram_max = ngram_min + 8
-    if ubatch_size > batch_size:
-        ubatch_size = batch_size
-
     spec_type = "draft-mtp,ngram-mod"
     if k4v_hits > 0:
         spec_type += ",ngram-map-k4v"
@@ -212,7 +206,8 @@ def benchmark_server(prompt=BENCH_PROMPT, max_tokens=BENCH_MAX_TOKENS,
 
     wall_s = time.perf_counter() - t0
     usage = data.get("usage", {})
-    timings = usage.get("timings", {})
+    # llama.cpp puts timings at top-level or under usage.timings
+    timings = data.get("timings") or usage.get("timings", {})
     comp_tokens = usage.get("completion_tokens", 0)
     prompt_tokens = usage.get("prompt_tokens", 0)
     tok_s = comp_tokens / wall_s if wall_s > 0 else 0.0
@@ -234,6 +229,7 @@ def benchmark_server(prompt=BENCH_PROMPT, max_tokens=BENCH_MAX_TOKENS,
         "draft_accepted": timings.get("draft_n_accepted", 0),
         "output_chars": len(content),
         "output_hash": hash(content) & 0xFFFFFFFF,
+        "timings_source": "top_level" if data.get("timings") else "usage",
     }
 
 
@@ -243,14 +239,24 @@ BASELINE = None
 
 
 def measure_baseline():
-    """Measure baseline once while default server is running. Returns dict."""
+    """Measure baseline using tuner's own server with DEFAULTS config.
+
+    Stops any existing server on our port, starts a fresh one with DEFAULTS,
+    measures 3 reps, caches, and leaves the server running.
+    """
     global BASELINE
     if BASELINE is not None:
         return BASELINE
 
-    if not server_health():
-        print("WARNING: server not running, starting default config for baseline...")
-        start_server(DEFAULTS)
+    print("Measuring baseline (tuner server with DEFAULTS)...")
+    kill_tuner_server()
+    stop_all_servers()
+    time.sleep(3)
+
+    if not start_server(DEFAULTS):
+        print("ERROR: failed to start baseline server")
+        BASELINE = {"tok_s": 50, "completion_tokens": 300, "predicted_tok_s": 55}
+        return BASELINE
 
     results = []
     for i in range(3):
@@ -259,7 +265,10 @@ def measure_baseline():
             results.append(r)
             print(f"  baseline run {i+1}: {r['tok_s']:.1f} tok/s, "
                   f"{r['completion_tokens']} tokens, "
-                  f"predicted={r.get('predicted_tok_s',0):.1f} tok/s")
+                  f"draft_n={r.get('draft_n',0)} "
+                  f"draft_accepted={r.get('draft_accepted',0)} "
+                  f"predicted={r.get('predicted_tok_s',0):.1f} tok/s, "
+                  f"timings_src={r.get('timings_source','?')}")
         time.sleep(1)
 
     if not results:
@@ -287,9 +296,15 @@ def measure_baseline():
 # ── objective ───────────────────────────────────────────────────────
 
 def _decode_params(vec):
-    """Round integer params, clamp all to bounds."""
+    """Round integer params, clamp to bounds, enforce constraints."""
     xs = np.clip(vec, BOUNDS_LO, BOUNDS_HI).copy()
     xs[IS_INT] = np.round(xs[IS_INT])
+    # Enforce ngram_min < ngram_max
+    if xs[4] >= xs[5]:
+        xs[5] = xs[4] + 8
+    # Enforce ubatch <= batch
+    if xs[11] > xs[10]:
+        xs[11] = xs[10]
     return xs
 
 
@@ -332,14 +347,14 @@ def evaluate_params(params_vec, result_file=None):
     tokens = r["completion_tokens"]
     bl_tokens = bl["completion_tokens"]
 
-    # Quality penalty: output too short = degenerate
-    quality_ratio = min(tokens / max(bl_tokens, 1), 2.0)
-    quality_penalty = 0.0
-    if quality_ratio < 0.5:
-        quality_penalty = 10.0 * (0.5 - quality_ratio)
-
-    # Minimize: -tok_s + quality_penalty
-    score = -tok_s + quality_penalty
+    # Quality guardrail: require token_ratio >= 0.85
+    quality_ratio = tokens / max(bl_tokens, 1)
+    if quality_ratio < 0.85:
+        # Heavy penalty: score as if tok_s = 0 + penalty proportional to shortfall
+        quality_penalty = 100.0 * (0.85 - quality_ratio)
+        score = quality_penalty
+    else:
+        score = -tok_s
 
     result = {
         "score": float(score),
@@ -521,25 +536,22 @@ def _main():
                         break
         return
 
-    # Measure baseline first
-    if not was_running:
-        print("Starting default server for baseline...")
-        start_server(DEFAULTS)
-
-    baseline = measure_baseline()
-    orig_tok_s = baseline["tok_s"]
-
-    # Stop user server
+    # Stop user server, measure baseline with tuner's own DEFAULTS server
     if was_running:
-        print("Stopping user server for tuning...")
+        print("Stopping user server...")
     stop_all_servers()
     time.sleep(3)
 
     try:
+        baseline = measure_baseline()
+        orig_tok_s = baseline["tok_s"]
+
         popsize = 10 if args.quick else 20
         generations = 5 if args.quick else 15
-        est_min = popsize * generations * 0.75
+        n_evals = popsize * (1 + generations)
+        est_min = n_evals * 0.75
         print(f"\nDE MTP tuner: pop={popsize} gen={generations}")
+        print(f"Evaluations: {popsize} initial + {popsize}×{generations} = {n_evals}")
         print(f"Estimated time: ~{est_min:.0f} min")
         print(f"Results log: {RESULT_LOG}\n")
 
