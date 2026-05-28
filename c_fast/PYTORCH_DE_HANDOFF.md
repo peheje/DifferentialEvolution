@@ -310,8 +310,48 @@ ridge fit would be approximate.
 PICKUP: Symbolic basis discovery with forward selection + ridge is the
 strongest approach yet for pair5-hard. The library-then-select pattern
 works beautifully when the true basis functions are in the search space.
-Next step: test on tasks where the true structure is NOT in a simple
-predefined library, and compare with GP/evolutionary term generation.
+
+## Random features + ridge regression
+
+Command:
+```bash
+.venv/bin/python -m torch_de.random_features_experiment --device cuda --phase sweep
+.venv/bin/python -m torch_de.random_features_experiment --device cuda --phase deep
+```
+
+Sweep: 640 configs (2 tasks × 4 families × 4 counts × 4 scales × 5 alphas).
+Deep: 3-seed validation of best configs, including 8192 features.
+
+Results:
+
+| Task | Method | Test nMSE | Features | Wall |
+|---|---:|---:|---:|---:|
+| pair1 | Fourier random 1024 | **1.0e-10** | 1024 | 0.04s |
+| pair1 | Fourier random 4096 | 7.1e-10 | 4096 | 0.65s |
+| pair1 | Adam MLP 2->12->1 | 0.000585 | 49 | 2.9s |
+| pair5-hard | Mixed random 8192 | 0.30 | 8192 | 1.3s |
+| pair5-hard | Fourier random 8192 | 0.30 | 8192 | 1.3s |
+| pair5-hard | Adam MLP 5->64->1 | **0.00116** | 449 | 2.5s |
+| pair5-hard | DE basepbest50 | 0.024 | 449 | 60s |
+| pair5-hard | Symbolic + fwd-sel | 3.4e-15 | 5 | 0.3s |
+
+pair1: Fourier random features achieve nMSE ~1e-10 (585,000x better than
+Adam). The target sin(2.5*x) + 0.6*x lives in the span of a moderate
+random Fourier basis.
+
+pair5-hard: Random features fail (nMSE=0.30, 260x worse than Adam). Even
+8192 features cannot match 449 trained NN weights. The structured terms
+(specific sin frequencies, x2*x3 interaction) need either the exact basis
+in a symbolic library or learned features via gradient descent.
+
+The gap between pair1 and pair5-hard shows that random features work when
+the target is smooth/low-dimensional-enough for a random basis to cover
+it, but fail on structured targets with specific interaction terms.
+
+PICKUP: Random features + ridge is a strong baseline for smooth low-dim
+tasks but cannot replace trained NNs on structured targets. Fourier
+features deserve inclusion as a baseline in future experiments.
+
 Future DE research
 should target non-differentiable/noisy objectives where gradient signal
 is unavailable, not attempt to decompose the DE mutation operator.
