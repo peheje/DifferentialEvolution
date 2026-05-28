@@ -370,3 +370,50 @@ projections can't efficiently approximate specific-frequency sinusoids.
 Future DE research
 should target non-differentiable/noisy objectives where gradient signal
 is unavailable, not attempt to decompose the DE mutation operator.
+
+## DE MTP speculative decoding tuner
+
+Black-box optimization of llama.cpp MTP spec decoding params to maximize
+tokens/sec. 12 mixed int/float parameters (draft counts, ngram windows,
+K4V cache sizes, VRAM budget, batch sizes). Each eval: start llama-server
+with config, benchmark on fixed prompt, stop (~45s/cycle).
+
+Command:
+```bash
+.venv/bin/python -m torch_de.llama_mtp_tuner --test    # integration test
+.venv/bin/python -m torch_de.llama_mtp_tuner --quick   # 60 evals + A/B
+```
+
+Hardware: RTX 3080 10GB, Qwen 3.6 35B-A3B Q4_K_M, CUDA llama.cpp.
+Baseline measured with DEFAULTS via same launch path as candidates.
+A/B comparison: 3 alternating rounds (default, winner × 3), same prompt,
+same sampling, same max_tokens.
+
+Quick run results (pop=10, gen=5, 60 evals + 6 A/B):
+
+| Metric | Default | Winner |
+|---|---:|---:|
+| Median tok/s | 63.4 | 65.8 |
+| Completion tokens | 512 | 512 |
+| Draft acceptance rate | 0.87 | 0.74 |
+| pred_tok/s | 66.5 | 69.0 |
+
+**Speedup: 1.039x (+3.9%)** — below the 5% threshold. The default config
+(from model recommended settings + llama.cpp defaults) is already well-tuned.
+
+Winner config changes: `draft_n_max=3` (was 2), `ngram_match=44` (was 32),
+`k4v_n=51/m=64/hits=5` (was 16/24/1), `fit_target=256` (was 1536),
+`batch=3357/ubatch=402` (was 4096/1024).
+
+DE improved 62.3→68.1 tok/s during optimization (9%), but A/B comparison
+shows only 3.9% real gain — the cold-start baseline was pessimistic.
+Alternating repeated measurements are essential for honest comparison.
+
+Results: `/tmp/qwen-de-tuner-results.jsonl`
+
+PICKUP: DE on llama.cpp MTP params finds a real but small improvement
+(+3.9%, below significance threshold). The default config is near-optimal.
+This direction is worth keeping as infrastructure — the tuner cycle works —
+but current defaults leave little headroom. To find larger gains: test
+different models, prompts, hardware, or add parameters like GPU layer
+placement, context size, or cache quantization to the search space.
