@@ -363,62 +363,66 @@ def benchmark_server(prompt=BENCH_PROMPT, max_tokens=BENCH_MAX_TOKENS,
 
 # ── baseline measurement ────────────────────────────────────────────
 
-BASELINE = None
+_BASELINE_CACHE = {}  # keyed by (max_tokens,)
 
 
-def measure_baseline():
+def measure_baseline(max_tokens=BENCH_MAX_TOKENS):
     """Measure baseline using tuner's own server with DEFAULTS config.
 
-    Stops any existing server on our port, starts a fresh one with DEFAULTS,
-    measures 3 reps, caches, and leaves the server running.
+    Cached per max_tokens so broad (256) and full (512) baselines
+    are independent.
     """
-    global BASELINE
-    if BASELINE is not None:
-        return BASELINE
+    cache_key = max_tokens
+    cached = _BASELINE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
 
-    print("Measuring baseline (tuner server with DEFAULTS)...")
+    print(f"Measuring baseline (DEFAULTS, max_tokens={max_tokens})...")
     kill_tuner_server()
     stop_all_servers()
     time.sleep(3)
 
     if not start_server(DEFAULTS):
         print("ERROR: failed to start baseline server")
-        BASELINE = {"tok_s": 50, "completion_tokens": 300, "predicted_tok_s": 55}
-        return BASELINE
+        fallback = {"tok_s": 50, "completion_tokens": max_tokens // 2}
+        _BASELINE_CACHE[cache_key] = fallback
+        return fallback
 
     results = []
     for i in range(3):
-        r = benchmark_server()
+        r = benchmark_server(max_tokens=max_tokens)
         if r and "error" not in r:
             results.append(r)
             print(f"  baseline run {i+1}: {r['tok_s']:.1f} tok/s, "
                   f"{r['completion_tokens']} tokens, "
                   f"draft_n={r.get('draft_n',0)} "
                   f"draft_accepted={r.get('draft_accepted',0)} "
-                  f"predicted={r.get('predicted_tok_s',0):.1f} tok/s, "
-                  f"timings_src={r.get('timings_source','?')}")
+                  f"predicted={r.get('predicted_tok_s',0):.1f} tok/s")
         time.sleep(1)
 
     if not results:
         print("ERROR: all baseline measurements failed")
-        BASELINE = {"tok_s": 50, "completion_tokens": 300, "predicted_tok_s": 55}
-        return BASELINE
+        fallback = {"tok_s": 50, "completion_tokens": max_tokens // 2}
+        _BASELINE_CACHE[cache_key] = fallback
+        return fallback
 
     tok_s_vals = [r["tok_s"] for r in results]
     tok_vals = [r["completion_tokens"] for r in results]
     pred_vals = [r.get("predicted_tok_s", 0) for r in results]
 
-    BASELINE = {
+    bl = {
         "tok_s": float(np.median(tok_s_vals)),
         "completion_tokens": int(np.median(tok_vals)),
         "predicted_tok_s": float(np.median(pred_vals)),
         "output_hash": results[0].get("output_hash", 0),
         "output_chars": results[0].get("output_chars", 0),
         "repeats": results,
+        "max_tokens": max_tokens,
     }
-    print(f"  baseline: {BASELINE['tok_s']:.1f} tok/s, "
-          f"{BASELINE['completion_tokens']} tokens\n")
-    return BASELINE
+    print(f"  baseline: {bl['tok_s']:.1f} tok/s, "
+          f"{bl['completion_tokens']} tokens\n")
+    _BASELINE_CACHE[cache_key] = bl
+    return bl
 
 
 # ── objective ───────────────────────────────────────────────────────
@@ -539,7 +543,7 @@ def evaluate_params_broad(params_vec, result_file=None, max_tokens=BROAD_MAX_TOK
         _log_result(result, result_file)
         return 1e6, result
 
-    bl = measure_baseline()
+    bl = measure_baseline(max_tokens=max_tokens)
     tok_s = r["tok_s"]
     tokens = r["completion_tokens"]
     bl_tokens = bl["completion_tokens"]
@@ -566,6 +570,7 @@ def evaluate_params_broad(params_vec, result_file=None, max_tokens=BROAD_MAX_TOK
         "config": cfg,
         "quality_ratio": quality_ratio,
         "broad_mode": True,
+        "baseline_tokens_used": bl_tokens,
     }
     _log_result(result, result_file)
     return float(score), result
