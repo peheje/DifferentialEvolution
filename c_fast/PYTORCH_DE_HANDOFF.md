@@ -175,3 +175,51 @@ Interpretation:
 PICKUP: Non-NN baselines are worth keeping. Kernel ridge is a serious baseline
 on small smooth low-dimensional tasks, and symbolic GP can rediscover simple
 equations, but neither beats Adam on `pair5-hard` yet.
+
+## Block-wise DE experiment
+
+Implemented `torch_de.block_de_experiment` and added `block_size` parameter to
+`de_solve`. Each trial mutates only one random contiguous block, leaving the
+rest of the genome unchanged. Optional slice scoring: 70% full MSE + 30% MSE
+on top-25% hardest training samples under current best.
+
+Command:
+
+```bash
+.venv/bin/python -m torch_de.block_de_experiment \
+  --device cuda \
+  --wall-seconds 60 \
+  --task pair5-hard \
+  --arch 5,64,1 \
+  --block-sizes 16 32 64
+```
+
+Results (60s wall clock, pair5-hard 5->64->1):
+
+| Method | Train MSE | Test MSE | nMSE | Gen | Evals |
+|---|---:|---:|---:|---:|---:|
+| DE full | 0.00118 | 0.0447 | 0.0337 | 39,499 | 15.2M |
+| DE block-16 | 1.52 | 3.96 | 2.99 | 42,943 | 16.5M |
+| DE block-32 | 1.27 | 3.60 | 2.71 | 43,460 | 16.7M |
+| DE block-64 | 1.60 | 5.82 | 4.39 | 42,122 | 16.2M |
+| DE block-16 slice | 3.97 | 7.53 | 5.68 | 26,291 | 10.1M |
+| DE block-32 slice | 4.25 | 8.46 | 6.38 | 26,378 | 10.1M |
+| DE block-64 slice | 3.86 | 8.01 | 6.04 | 26,292 | 10.1M |
+| Adam | 3.24e-05 | 0.00154 | 0.00116 | — | 120K steps |
+
+Interpretation:
+
+- Full-vector DE dominates block-wise DE by ~80-130x on test MSE.
+- Blocks touching only 3.5-14% of params per trial prevent effective
+  parameter-space exploration. Each generation is slightly faster (more
+  generations fit under the wall clock), but the exploration handicap
+  overwhelms any benefit.
+- Slice scoring reduces generations (costs extra forward passes) and does not
+  improve test MSE here.
+- The per-neuron block idea, where semantically related parameters are mutated
+  together, is not explored here but might behave differently.
+
+PICKUP: Block-wise DE with 16-64 contiguous param blocks does not work on
+`pair5-hard 5->64->1`. If the block idea is revisited, try per-neuron blocks
+(bias + input weights + output weight = semantically coherent), or make block
+size adaptive/larger. Adam still dominates all DE variants on this smooth task.
