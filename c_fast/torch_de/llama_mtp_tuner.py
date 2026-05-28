@@ -389,8 +389,8 @@ def _log_result(result, result_file=None):
 def _de_tune(objective_fn, popsize=20, generations=15, seed=42,
              result_file=None):
     """Simple DE/rand/1/bin with per-dimension bounds and jDE adaptation."""
+    P = max(popsize, 4)  # rand/1 needs at least 4
     rng = np.random.Generator(np.random.PCG64(seed))
-    P = popsize
     lo = BOUNDS_LO
     hi = BOUNDS_HI
 
