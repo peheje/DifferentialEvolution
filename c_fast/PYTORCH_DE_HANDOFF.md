@@ -349,8 +349,23 @@ the target is smooth/low-dimensional-enough for a random basis to cover
 it, but fail on structured targets with specific interaction terms.
 
 PICKUP: Random features + ridge is a strong baseline for smooth low-dim
-tasks but cannot replace trained NNs on structured targets. Fourier
-features deserve inclusion as a baseline in future experiments.
+tasks (Fourier excels on pair1) but cannot replace trained NNs on
+structured targets like pair5-hard. Adding structured low-order features
+(xi, xi*xj) does not rescue it — the sin terms require matched basis
+functions, not random projections.
+
+## Random features v2 — structured low-order + Fourier
+
+Added pairwise product features xi*xj alongside Fourier random features.
+90-config sweep on pair5-hard + structured-only baseline.
+
+  Best v2: Fourier 8192 + raw + pairwise, nMSE=0.30
+  Structured-only: raw + pairwise, nMSE=0.56
+  Adam MLP: nMSE=0.00116
+
+Structured features don't close the gap. The sin(2.5*x0), sin(1.7*x1),
+sin(x4+x0) terms require matching basis functions — random sin/cos
+projections can't efficiently approximate specific-frequency sinusoids.
 
 Future DE research
 should target non-differentiable/noisy objectives where gradient signal
