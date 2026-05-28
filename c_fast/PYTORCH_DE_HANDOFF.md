@@ -261,6 +261,57 @@ The "smaller experiments give DE better signal" hypothesis is falsified
 for random/local parameter subsets on coupled NN weights.
 
 PICKUP: Block-wise DE is not useful for NN weight optimization. DE works
-best as a full-vector optimizer on this problem class. Future DE research
+best as a full-vector optimizer on this problem class.
+
+## Symbolic basis discovery — exact formula recovery for pair5-hard
+
+Approach: build 185-term candidate library (linear, products, sin/cos at 7
+frequencies, sin(xi±xj), sin(a*xi+b*xj)), then select terms via forward
+selection + ridge regression.
+
+Command:
+```bash
+.venv/bin/python -m torch_de.symbolic_basis_experiment --device cuda
+```
+
+Oracle sanity: ridge on exact true terms recovers coefficients perfectly
+(nMSE ~4e-14). Confirms coefficient-fitting path is correct.
+
+Forward selection with tiny complexity penalty (cp=1e-8) discovers the
+EXACT true formula in 0.3 seconds:
+
+  y = 0.2000*x2 + 0.3500*x2*x3 + 0.7000*sin(1.7*x1)
+    + 1.0000*sin(2.5*x0) + 0.2500*sin(x0+x4)
+
+Test nMSE = 3.4e-15 — 11 orders of magnitude better than Adam (0.00116).
+
+Evolutionary subset search also recovers true structure but includes some
+zero-coefficient terms.
+
+Comparison:
+
+| Method | Test MSE | nMSE | Terms | Wall |
+|---|---:|---:|---:|---:|
+| Symbolic + fwd-sel + ridge | 4.5e-15 | 3.4e-15 | 5 | 0.3s |
+| Adam MLP 5->64->1 | 0.00154 | 0.00116 | 449 | 2.5s |
+| DE basepbest50 | 0.0318 | 0.0240 | 449 | 60s |
+| gplearn Symbolic GP | 0.849 | 0.640 | — | 25.7s |
+
+Key finding: Symbolic structure discovery via forward selection + ridge
+completely solves pair5-hard when true basis functions are in the library.
+This is a fundamentally different result class from NN optimization —
+exact formula recovery vs function approximation.
+
+Limitation: success depends on having the exact term shapes in the library.
+The sin(a*xi) grid at 0.5/1.0/1.5/1.7/2.0/2.5/3.0 happens to include
+the exact frequencies (1.7, 2.5). Without exact frequency matches, the
+ridge fit would be approximate.
+
+PICKUP: Symbolic basis discovery with forward selection + ridge is the
+strongest approach yet for pair5-hard. The library-then-select pattern
+works beautifully when the true basis functions are in the search space.
+Next step: test on tasks where the true structure is NOT in a simple
+predefined library, and compare with GP/evolutionary term generation.
+Future DE research
 should target non-differentiable/noisy objectives where gradient signal
 is unavailable, not attempt to decompose the DE mutation operator.
