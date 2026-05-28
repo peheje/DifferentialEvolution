@@ -82,6 +82,7 @@ def de_solve(
     pbest_percent=10,
     device="cpu",
     dtype=torch.float32,
+    block_size=0,
 ):
     """Run Differential Evolution.
 
@@ -97,6 +98,8 @@ def de_solve(
         best_out: if provided, tensor to copy the best solution into
         mutation_strategy: 0=rand/1, 1=best/1, 5=basepbest/1
         pbest_percent: top p% for pbest strategies (only strategy 5)
+        block_size: if > 0, mutate one random contiguous block per trial
+            (block-wise DE); 0 = full-vector DE
 
     Returns:
         best_loss (float)
@@ -219,6 +222,17 @@ def de_solve(
 
         # trial = parent for dimensions not crossed, mutant for crossed
         trials = torch.where(cross_mask, mutant, pop)
+
+        # block-wise: zero out crossover outside the selected block per row
+        if block_size > 0 and block_size < D:
+            block_offsets = torch.randint(
+                0, D - block_size + 1, (active,), device=device)
+            block_mask = torch.zeros(active, D, dtype=torch.bool, device=device)
+            idx_d = torch.arange(block_size, device=device)
+            block_mask[torch.arange(active, device=device).unsqueeze(1),
+                       (block_offsets.unsqueeze(1) + idx_d).clamp(0, D - 1)] = True
+            # Re-apply crossover only within block
+            trials = torch.where(block_mask, trials, pop)
 
         # clamp to bounds
         trials = torch.clamp(trials, bound_lo, bound_hi)
