@@ -74,6 +74,136 @@ BOUNDS_HI = np.array([p[3] for p in PARAM_DEFS], dtype=np.float64)
 IS_INT = np.array([p[1] == "int" for p in PARAM_DEFS], dtype=bool)
 DEFAULTS = np.array([p[4] for p in PARAM_DEFS], dtype=np.float64)
 
+# ── broad-mode parameter definitions (includes system-level knobs) ───
+
+# (name, type, lo, hi, default, [choices for categorical])
+# type: "int", "float", "cat"
+BROAD_PARAM_DEFS = [
+    # System knobs
+    ("ctx_size",     "cat",  0,  3,  1,  [4096, 8192, 16384, 32768]),
+    ("cache_k",      "cat",  0,  2,  1,  ["f16", "q8_0", "q4_0"]),
+    ("cache_v",      "cat",  0,  2,  1,  ["f16", "q8_0", "q4_0"]),
+    ("spec_mode",    "cat",  0,  2,  1,  ["draft-mtp",
+                                          "draft-mtp,ngram-mod",
+                                          "draft-mtp,ngram-mod,ngram-map-k4v"]),
+    # MTP spec params
+    ("draft_n_max",  "int",  1,  4,  2),
+    ("draft_n_min",  "int",  0,  1,  0),
+    ("draft_p_min",  "float",0.0,0.9,0.0),
+    ("ngram_match",  "int",  8, 64, 32),
+    ("ngram_min",    "int", 16,128, 64),
+    ("ngram_max",    "int", 32,256, 96),
+    ("k4v_n",        "int",  8, 64, 16),
+    ("k4v_m",        "int",  8, 64, 24),
+    ("k4v_hits",     "int",  0,  8,  1),
+    ("fit_target",   "int",256,2048,1536),
+    ("batch_size",   "int",256,4096,4096),
+    ("ubatch_size",  "int", 64,2048,1024),
+]
+
+BROAD_D = len(BROAD_PARAM_DEFS)
+BROAD_BOUNDS_LO = np.array([p[2] for p in BROAD_PARAM_DEFS], dtype=np.float64)
+BROAD_BOUNDS_HI = np.array([p[3] for p in BROAD_PARAM_DEFS], dtype=np.float64)
+BROAD_IS_INT = np.array([p[1] in ("int", "cat") for p in BROAD_PARAM_DEFS], dtype=bool)
+BROAD_DEFAULTS = np.array([p[4] for p in BROAD_PARAM_DEFS], dtype=np.float64)
+
+BROAD_MAX_TOKENS = 256   # shorter for fast broad search
+BROAD_TIMEOUT = 60
+
+def _decode_broad_params(vec, param_defs=BROAD_PARAM_DEFS,
+                         bounds_lo=BROAD_BOUNDS_LO, bounds_hi=BROAD_BOUNDS_HI,
+                         is_int=BROAD_IS_INT):
+    """Round integer/categorical params, clamp to bounds, enforce constraints."""
+    xs = np.clip(vec, bounds_lo, bounds_hi).copy()
+    xs[is_int] = np.round(xs[is_int])
+    # ngram_min < ngram_max (indices 7,8)
+    if xs[7] >= xs[8]:
+        xs[8] = xs[7] + 8
+    # ubatch <= batch (indices 14,15)
+    if xs[15] > xs[14]:
+        xs[15] = xs[14]
+    return xs
+
+
+def _broad_params_to_dict(xs):
+    d = {}
+    for i in range(BROAD_D):
+        p = BROAD_PARAM_DEFS[i]
+        name = p[0]
+        if p[1] == "cat":
+            idx = int(xs[i])
+            choices = p[5]
+            d[name] = idx
+            d[name + "_str"] = choices[idx] if 0 <= idx < len(choices) else "?"
+        elif p[1] == "int":
+            d[name] = int(xs[i])
+        else:
+            d[name] = float(xs[i])
+    return d
+
+
+def start_server_broad(params_vec):
+    """Start llama-server with broad-mode params. Returns True if healthy."""
+    global _server_proc
+    kill_tuner_server()
+
+    xs = _decode_broad_params(params_vec)
+    ctx_size = int(BROAD_PARAM_DEFS[0][5][int(xs[0])])
+    cache_k = BROAD_PARAM_DEFS[1][5][int(xs[1])]
+    cache_v = BROAD_PARAM_DEFS[2][5][int(xs[2])]
+    spec_mode = BROAD_PARAM_DEFS[3][5][int(xs[3])]
+    draft_n_max = int(xs[4]); draft_n_min = int(xs[5])
+    draft_p_min = float(xs[6])
+    ngram_match = int(xs[7]); ngram_min = int(xs[8]); ngram_max = int(xs[9])
+    k4v_n = int(xs[10]); k4v_m = int(xs[11]); k4v_hits = int(xs[12])
+    fit_target = int(xs[13])
+    batch_size = int(xs[14]); ubatch_size = int(xs[15])
+
+    cmd = [
+        LLAMA_SERVER,
+        "-m", MODEL,
+        "-c", str(ctx_size),
+        "-ctk", "q8_0", "-ctv", "q8_0",
+        "-ctkd", cache_k, "-ctvd", cache_v,
+        "-ctxcp", "64",
+        "-fitt", str(fit_target),
+        "--spec-type", spec_mode,
+        "--spec-draft-n-max", str(draft_n_max),
+        "--spec-draft-n-min", str(draft_n_min),
+        "--spec-draft-p-min", str(draft_p_min),
+        "--spec-ngram-mod-n-match", str(ngram_match),
+        "--spec-ngram-mod-n-min", str(ngram_min),
+        "--spec-ngram-mod-n-max", str(ngram_max),
+        "--spec-ngram-map-k4v-size-n", str(k4v_n),
+        "--spec-ngram-map-k4v-size-m", str(k4v_m),
+        "--spec-ngram-map-k4v-min-hits", str(k4v_hits),
+        "-b", str(batch_size), "-ub", str(ubatch_size),
+        "-fa", "on",
+        "--temp", f"{FIXED_TEMP:.2f}",
+        "--top-p", f"{FIXED_TOP_P:.2f}",
+        "--top-k", str(FIXED_TOP_K),
+        "--min-p", f"{FIXED_MIN_P:.2f}",
+        "--presence-penalty", "0.0",
+        "--no-mmap", "--mlock", "--no-warmup", "--no-mmproj",
+        "--reasoning", "off",
+        "--chat-template-kwargs", '{"enable_thinking": false}',
+        "--host", "127.0.0.1", "--port", str(SERVER_PORT),
+    ]
+
+    with open(SERVER_LOG, "w") as log:
+        _server_proc = subprocess.Popen(
+            cmd, stdout=log, stderr=log,
+            start_new_session=True)
+
+    for _ in range(90):
+        time.sleep(2)
+        if server_health():
+            return True
+        if _server_proc.poll() is not None:
+            return False
+    return False
+
+
 # ── server control ──────────────────────────────────────────────────
 
 _server_proc = None
@@ -382,6 +512,119 @@ def _log_result(result, result_file=None):
         pass
 
 
+def evaluate_params_broad(params_vec, result_file=None, max_tokens=BROAD_MAX_TOKENS,
+                          timeout=BROAD_TIMEOUT):
+    """Full eval cycle for broad mode. Returns (score, metrics_dict)."""
+    xs = _decode_broad_params(params_vec)
+    cfg = _broad_params_to_dict(xs)
+
+    t0 = time.perf_counter()
+    ok = start_server_broad(xs)
+    start_s = time.perf_counter() - t0 if ok else -1
+
+    if not ok:
+        kill_tuner_server()
+        result = {"error": "server_start_failed", "wall_s": time.perf_counter() - t0,
+                  "score": 1e6, "config": cfg}
+        _log_result(result, result_file)
+        return 1e6, result
+
+    benchmark_server("Hello", max_tokens=10, timeout=30)
+    r = benchmark_server(max_tokens=max_tokens, timeout=timeout)
+    kill_tuner_server()
+
+    if r is None or "error" in r:
+        result = {"error": r.get("error", "benchmark_failed") if r else "None",
+                  "wall_s": time.perf_counter() - t0, "score": 1e6, "config": cfg}
+        _log_result(result, result_file)
+        return 1e6, result
+
+    bl = measure_baseline()
+    tok_s = r["tok_s"]
+    tokens = r["completion_tokens"]
+    bl_tokens = bl["completion_tokens"]
+
+    quality_ratio = tokens / max(bl_tokens, 1)
+    if quality_ratio < 0.85:
+        quality_penalty = 100.0 * (0.85 - quality_ratio)
+        score = quality_penalty
+    else:
+        score = -tok_s
+
+    result = {
+        "score": float(score),
+        "tok_s": tok_s,
+        "completion_tokens": tokens,
+        "predicted_tok_s": r.get("predicted_tok_s", 0),
+        "draft_n": r.get("draft_n", 0),
+        "draft_accepted": r.get("draft_accepted", 0),
+        "draft_acceptance": (r.get("draft_accepted", 0) / max(r.get("draft_n", 1), 1)),
+        "output_chars": r.get("output_chars", 0),
+        "output_hash": r.get("output_hash", 0),
+        "wall_s": time.perf_counter() - t0,
+        "server_start_s": start_s,
+        "config": cfg,
+        "quality_ratio": quality_ratio,
+        "broad_mode": True,
+    }
+    _log_result(result, result_file)
+    return float(score), result
+
+
+def _de_tune_broad(objective_fn, popsize=8, generations=3, seed=42,
+                   bounds_lo=BROAD_BOUNDS_LO, bounds_hi=BROAD_BOUNDS_HI,
+                   result_file=None):
+    """DE for broad mode — supports per-dim bounds from BROAD_PARAM_DEFS."""
+    D_b = len(bounds_lo)
+    P = max(popsize, 4)
+    rng = np.random.Generator(np.random.PCG64(seed))
+
+    pop = rng.uniform(0, 1, size=(P, D_b)) * (bounds_hi - bounds_lo) + bounds_lo
+    Fi = np.full(P, 0.5)
+    CRi = rng.uniform(0, 1, size=P)
+    scores = np.full(P, np.inf)
+
+    for i in range(P):
+        scores[i] = objective_fn(pop[i])
+
+    best_idx = np.argmin(scores)
+    best_score = scores[best_idx]
+    best_x = pop[best_idx].copy()
+
+    for g in range(generations):
+        for i in range(P):
+            if rng.random() < 0.1:
+                Fi[i] = rng.uniform(0.1, 0.9)
+            if rng.random() < 0.1:
+                CRi[i] = rng.uniform(0, 1)
+
+            candidates = [j for j in range(P) if j != i]
+            r1, r2, r3 = rng.choice(candidates, size=3, replace=False)
+
+            mutant = pop[r1] + Fi[i] * (pop[r2] - pop[r3])
+            mutant = np.clip(mutant, bounds_lo, bounds_hi)
+
+            jrand = rng.integers(0, D_b)
+            trial = pop[i].copy()
+            for j in range(D_b):
+                if j == jrand or rng.random() < CRi[i]:
+                    trial[j] = mutant[j]
+
+            trial_score = objective_fn(trial)
+
+            if trial_score < scores[i]:
+                pop[i] = trial
+                scores[i] = trial_score
+                if trial_score < best_score:
+                    best_score = trial_score
+                    best_x = trial.copy()
+
+        print(f"  gen {g+1}/{generations}: best_score={best_score:.2f} "
+              f"(tok_s≈{-best_score:.1f}) pop_best={scores.min():.2f}")
+
+    return best_score, best_x
+
+
 # ── DE loop (per-dim bounds, mixed int/float) ───────────────────────
 
 def _de_tune(objective_fn, popsize=20, generations=15, seed=42,
@@ -501,10 +744,107 @@ def _main():
                         help="Quick optimization (pop=10, gen=5, ~40 min)")
     parser.add_argument("--tune", action="store_true",
                         help="Full optimization (pop=20, gen=15, ~4 hrs)")
+    parser.add_argument("--broad", action="store_true",
+                        help="Broad search: 15 params incl ctx/cache/spec mode "
+                        "(pop=8, gen=3, ~25 min)")
     args = parser.parse_args()
 
-    if not (args.test or args.quick or args.tune):
+    if not (args.test or args.quick or args.tune or args.broad):
         parser.print_help()
+        return
+
+    if args.broad:
+        # Fast broad search with expanded system params
+        stop_all_servers()
+        time.sleep(3)
+        try:
+            baseline = measure_baseline()
+            orig_tok_s = baseline["tok_s"]
+
+            popsize, generations = 8, 3
+            n_evals = popsize * (1 + generations)
+            est_min = n_evals * 0.6
+            print(f"\nDE MTP broad search: pop={popsize} gen={generations}")
+            print(f"Params: {BROAD_D} (incl ctx_size, cache_k/v, spec_mode)")
+            print(f"Evaluations: {popsize} initial + {popsize}×{generations} = {n_evals}")
+            print(f"Estimated time: ~{est_min:.0f} min")
+            print(f"Benchmark: {BROAD_MAX_TOKENS} tokens per eval")
+            print(f"Results log: {RESULT_LOG}\n")
+
+            obj = lambda v: evaluate_params_broad(
+                v, result_file=RESULT_LOG, max_tokens=BROAD_MAX_TOKENS)[0]
+            score, best_x = _de_tune_broad(
+                obj, popsize=popsize, generations=generations, seed=42,
+                bounds_lo=BROAD_BOUNDS_LO, bounds_hi=BROAD_BOUNDS_HI,
+                result_file=RESULT_LOG)
+
+            # A/B comparison with 512 tokens for accuracy
+            print(f"\n{'='*60}")
+            print(f"A/B comparison: DEFAULTS vs winner")
+            print(f"(3 rounds alternating, 512 tokens)")
+            print(f"{'='*60}")
+            stop_all_servers()
+            time.sleep(2)
+
+            # Build default broad vector for A/B
+            default_broad = BROAD_DEFAULTS.copy()
+
+            # Re-benchmark both with full 512-token benchmark
+            ab_results_broad = []
+            for rnd in range(3):
+                for label, vec in [("default", default_broad), ("winner", best_x)]:
+                    xs = _decode_broad_params(vec)
+                    ok = start_server_broad(xs)
+                    if not ok:
+                        ab_results_broad.append({"label": label, "error": "server_fail"})
+                        kill_tuner_server()
+                        continue
+                    benchmark_server("Hello", max_tokens=10, timeout=30)
+                    r = benchmark_server(max_tokens=512, timeout=90)
+                    kill_tuner_server()
+                    if r and "error" not in r:
+                        r["label"] = label
+                        r["round"] = rnd
+                        r["config"] = _broad_params_to_dict(xs)
+                        ab_results_broad.append(r)
+                        print(f"  {label}: {r['tok_s']:.1f} tok/s, {r['completion_tokens']} tokens, "
+                              f"draft_n={r.get('draft_n',0)} accepted={r.get('draft_accepted',0)}")
+                    else:
+                        ab_results_broad.append({"label": label, "error": str(r.get('error','?'))})
+                        print(f"  {label}: ERROR")
+                    time.sleep(1)
+
+            _log_result({"ab_comparison_broad": ab_results_broad}, RESULT_LOG)
+
+            # Summary
+            for label in ["default", "winner"]:
+                vals = [r["tok_s"] for r in ab_results_broad
+                        if r.get("label") == label and "error" not in r]
+                tokens = [r["completion_tokens"] for r in ab_results_broad
+                         if r.get("label") == label and "error" not in r]
+                drafts = [r.get("draft_n", 0) for r in ab_results_broad
+                         if r.get("label") == label and "error" not in r]
+                accepted = [r.get("draft_accepted", 0) for r in ab_results_broad
+                           if r.get("label") == label and "error" not in r]
+                if vals:
+                    acc = [a/max(d,1) for a,d in zip(accepted, drafts)]
+                    print(f"\n  {label}: median tok/s={np.median(vals):.1f} "
+                          f"tokens={np.median(tokens):.0f} "
+                          f"draft_accept={np.median(acc):.2f} (n={len(vals)})")
+
+            # Print best config
+            xs = _decode_broad_params(best_x)
+            cfg = _broad_params_to_dict(xs)
+            print(f"\nBest broad config:")
+            for name in [p[0] for p in BROAD_PARAM_DEFS]:
+                v = cfg.get(name, '?')
+                if name + "_str" in cfg:
+                    v = f"{v} ({cfg[name+'_str']})"
+                print(f"  {name:<20} = {v}")
+            print(f"\nResults: {RESULT_LOG}")
+
+        finally:
+            kill_tuner_server()
         return
 
     if args.test:
