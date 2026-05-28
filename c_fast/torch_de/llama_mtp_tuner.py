@@ -32,8 +32,6 @@ MODEL = ("/home/phj/models/gguf/"
 SERVER_PORT = 8080
 SERVER_URL = f"http://127.0.0.1:{SERVER_PORT}"
 SERVER_LOG = "/tmp/qwen-de-tuner.log"
-RESTORE_SCRIPT = "/home/phj/ai-scripts/qwen-server-start.sh"
-STOP_SCRIPT = "/home/phj/ai-scripts/qwen-server-stop.sh"
 RESULT_LOG = "/tmp/qwen-de-tuner-results.jsonl"
 
 BENCH_PROMPT = (
@@ -509,36 +507,17 @@ def _main():
         parser.print_help()
         return
 
-    # Save original server state
-    was_running = server_health()
-    print(f"Server running before experiment: {was_running}")
-
     if args.test:
-        # Fake objective test first (no server needed)
         _test_fake_objective()
-        # Stop user server, run real eval, restore
         try:
-            if was_running:
-                print("Stopping user server for real eval test...")
-                stop_all_servers()
-                time.sleep(3)
+            stop_all_servers()
+            time.sleep(3)
             _test_one_real()
         finally:
             kill_tuner_server()
-            if was_running:
-                print("Restoring user server...")
-                subprocess.run([RESTORE_SCRIPT, "32768", "off"],
-                               capture_output=True, timeout=120)
-                for _ in range(45):
-                    time.sleep(2)
-                    if server_health():
-                        print("  User server restored.")
-                        break
         return
 
-    # Stop user server, measure baseline with tuner's own DEFAULTS server
-    if was_running:
-        print("Stopping user server...")
+    # Stop any running server, we own the GPU for this run
     stop_all_servers()
     time.sleep(3)
 
@@ -560,35 +539,77 @@ def _main():
                                  generations=generations, seed=42,
                                  result_file=RESULT_LOG)
 
-        # Final benchmark of best config
+        # A/B comparison: DEFAULTS vs winner, alternating, 3 rounds each
         print(f"\n{'='*60}")
-        print(f"Final benchmark of best config...")
-        print(f"Baseline tok/s: {orig_tok_s:.1f}")
+        print(f"A/B comparison: DEFAULTS vs winner (3 rounds, alternating)")
+        print(f"{'='*60}")
         stop_all_servers()
         time.sleep(2)
 
-        _, result = evaluate_params(best_x)
-        best_tok_s = result.get("tok_s", 0)
-        speedup = best_tok_s / orig_tok_s if orig_tok_s > 0 else 1.0
+        ab_compare(DEFAULTS, best_x,
+                   labels=("default", "winner"), n_rounds=3,
+                   result_file=RESULT_LOG)
 
-        xs = _decode_params(best_x)
-        print(f"\nBest config (tok_s={best_tok_s:.1f}, {speedup:.2f}x vs baseline):")
-        for i in range(D):
-            val = int(xs[i]) if IS_INT[i] else float(xs[i])
-            print(f"  {PARAM_DEFS[i][0]:<20} = {val}")
         print(f"\nResults: {RESULT_LOG}")
 
     finally:
         kill_tuner_server()
-        if was_running:
-            print("Restoring user server...")
-            subprocess.run([RESTORE_SCRIPT, "32768", "off"],
-                           capture_output=True, timeout=120)
-            for _ in range(45):
-                time.sleep(2)
-                if server_health():
-                    print("User server restored.")
-                    break
+        # Do NOT restore user server — caller manages that
+
+
+def ab_compare(config_a, config_b, labels=("default", "winner"), n_rounds=3,
+               result_file=None):
+    """Alternating A/B comparison: start server with config, benchmark, stop.
+
+    Runs n_rounds × 2 benchmarks, alternating A/B/A/B...
+    Returns list of result dicts.
+    """
+    results = []
+    configs = [config_a, config_b]
+    names = list(labels)
+
+    for rnd in range(n_rounds):
+        for idx in range(2):
+            label = names[idx]
+            xs = _decode_params(configs[idx])
+            ok = start_server(xs)
+            if not ok:
+                results.append({"label": label, "error": "server_start_failed"})
+                kill_tuner_server()
+                continue
+            benchmark_server("Hello", max_tokens=10, timeout=30)
+            r = benchmark_server()
+            kill_tuner_server()
+            if r and "error" not in r:
+                r["label"] = label
+                r["round"] = rnd
+                r["config"] = _params_to_dict(xs)
+                results.append(r)
+                print(f"  {label}: {r['tok_s']:.1f} tok/s, {r['completion_tokens']} tokens, "
+                      f"draft_n={r.get('draft_n',0)} accepted={r.get('draft_accepted',0)} "
+                      f"pred={r.get('predicted_tok_s',0):.1f}")
+            else:
+                results.append({"label": label, "error": r.get("error", "benchmark_failed")})
+                print(f"  {label}: ERROR")
+            time.sleep(1)
+
+    # Summary
+    for label in names:
+        vals = [r["tok_s"] for r in results if r.get("label") == label and "error" not in r]
+        tokens = [r["completion_tokens"] for r in results if r.get("label") == label and "error" not in r]
+        preds = [r.get("predicted_tok_s", 0) for r in results if r.get("label") == label and "error" not in r]
+        drafts = [r.get("draft_n", 0) for r in results if r.get("label") == label and "error" not in r]
+        accepted = [r.get("draft_accepted", 0) for r in results if r.get("label") == label and "error" not in r]
+        if vals:
+            acc_rates = [a / max(d, 1) for a, d in zip(accepted, drafts)]
+            print(f"\n  {label}: median tok/s={np.median(vals):.1f} "
+                  f"tokens={np.median(tokens):.0f} "
+                  f"pred_tok/s={np.median(preds):.1f} "
+                  f"draft_accept={np.median(acc_rates):.2f} "
+                  f"(n={len(vals)})")
+
+    _log_result({"ab_comparison": results}, result_file)
+    return results
 
 
 if __name__ == "__main__":
