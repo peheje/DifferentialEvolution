@@ -67,10 +67,10 @@ def _generate_random_weights(n_features, n_inputs, scale, seed, family):
 
 
 def build_features(X, n_features, family="sigmoid", scale=1.0, seed=0,
-                   include_raw=True):
+                   include_raw=True, include_pairwise=False):
     """Build design matrix Phi for input X [N, D].
 
-    Returns Phi [N, n_features] (plus raw inputs if include_raw).
+    Returns Phi [N, n_features] (plus raw/pairwise if requested).
     """
     N, D = X.shape
     X = np.asarray(X, dtype=np.float64)
@@ -79,8 +79,15 @@ def build_features(X, n_features, family="sigmoid", scale=1.0, seed=0,
     if include_raw:
         parts.append(X)
 
+    if include_pairwise:
+        for i in range(D):
+            for j in range(i + 1, D):
+                parts.append(X[:, i] * X[:, j])
+
+    n_structured = sum(p.shape[1] if len(p.shape) > 1 else 1 for p in parts)
+
     if family in ("sigmoid", "tanh", "fourier", "mixed"):
-        nf = max(n_features - D * include_raw, 0)
+        nf = max(n_features - n_structured, 0)
         if family == "mixed":
             # Split features among sigmoid, tanh, fourier
             n_each = max(nf // 3, 1)
@@ -132,14 +139,15 @@ def eval_config(X_fit, y_fit, X_val, y_val, X_test, y_test, cfg):
     alpha = cfg["alpha"]
     seed = cfg.get("seed", 0)
     include_raw = cfg.get("include_raw", True)
+    include_pairwise = cfg.get("include_pairwise", False)
     standardize = cfg.get("standardize", True)
 
     t0 = time.perf_counter()
 
     # Build features for all splits with same random weights
-    Phi_fit = build_features(X_fit, nf, family, scale, seed, include_raw)
-    Phi_val = build_features(X_val, nf, family, scale, seed, include_raw)
-    Phi_test = build_features(X_test, nf, family, scale, seed, include_raw)
+    Phi_fit = build_features(X_fit, nf, family, scale, seed, include_raw, include_pairwise)
+    Phi_val = build_features(X_val, nf, family, scale, seed, include_raw, include_pairwise)
+    Phi_test = build_features(X_test, nf, family, scale, seed, include_raw, include_pairwise)
 
     # Standardize: center + scale using fit-set statistics
     if standardize and Phi_fit.shape[1] > 0:
