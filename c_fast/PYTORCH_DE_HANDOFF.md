@@ -219,7 +219,8 @@ Interpretation:
 - The per-neuron block idea, where semantically related parameters are mutated
   together, is not explored here but might behave differently.
 
-PICKUP: Block-wise DE with 16-64 contiguous param blocks does not work on
-`pair5-hard 5->64->1`. If the block idea is revisited, try per-neuron blocks
-(bias + input weights + output weight = semantically coherent), or make block
-size adaptive/larger. Adam still dominates all DE variants on this smooth task.
+PICKUP: Block-wise DE in all tested forms (contiguous 3-50% blocks,
+per-neuron blocks, adaptive sizing) is ~80x worse than full-vector DE on
+NN weight optimization. NN weights are too tightly coupled for coordinate-
+descent-style block mutation. Future DE work should target non-
+differentiable/noisy objectives where gradient signal is unavailable.
