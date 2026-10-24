@@ -2,6 +2,7 @@
 #define DE_SOLVER_H
 
 #include <math.h>
+#include <immintrin.h>
 #include <omp.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -25,6 +26,28 @@ static inline uint64_t de_splitmix64(uint64_t *x) {
     z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
     z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
     return z ^ (z >> 31);
+}
+
+
+/* ── AVX2 splitmix64: 4 consecutive draws at once ─────────────────
+   splitmix64 is counter based (state += GAMMA), so draws k=1..4 from state s
+   are mix(s + k*GAMMA); a block of 4 yields exactly the same numbers, in the
+   same order, as 4 calls to de_splitmix64. */
+static inline __m256i de_mul64(__m256i a, __m256i b) { /* low 64 bits of a*b */
+    __m256i bswap = _mm256_shuffle_epi32(b, 0xB1);
+    __m256i prod = _mm256_mullo_epi32(a, bswap);
+    __m256i sum = _mm256_hadd_epi32(prod, _mm256_setzero_si256());
+    __m256i hi = _mm256_shuffle_epi32(sum, 0x73);
+    return _mm256_add_epi64(_mm256_mul_epu32(a, b), hi);
+}
+static inline __m256i de_splitmix64x4(uint64_t *state) {
+    const __m256i ctr = _mm256_set_epi64x((long long)(4 * 0x9e3779b97f4a7c15ULL), (long long)(3 * 0x9e3779b97f4a7c15ULL),
+                                          (long long)(2 * 0x9e3779b97f4a7c15ULL), (long long)0x9e3779b97f4a7c15ULL);
+    __m256i z = _mm256_add_epi64(_mm256_set1_epi64x((long long)*state), ctr);
+    *state += 4 * 0x9e3779b97f4a7c15ULL;
+    z = de_mul64(_mm256_xor_si256(z, _mm256_srli_epi64(z, 30)), _mm256_set1_epi64x((long long)0xbf58476d1ce4e5b9ULL));
+    z = de_mul64(_mm256_xor_si256(z, _mm256_srli_epi64(z, 27)), _mm256_set1_epi64x((long long)0x94d049bb133111ebULL));
+    return _mm256_xor_si256(z, _mm256_srli_epi64(z, 31));
 }
 
 static inline double de_rand01(uint64_t *state) {
@@ -100,13 +123,14 @@ static double de_solve_impl(
     double *prev_pop      = (double *)malloc(capacity_len * sizeof(double));
     double *trial_scratch = (double *)malloc((size_t)threads * agent_len * sizeof(double));
     double *scores        = (double *)malloc((size_t)initial_popsize * sizeof(double));
+    unsigned char *accepted = (unsigned char *)calloc((size_t)initial_popsize, 1);
     double *Fi            = (double *)malloc((size_t)initial_popsize * sizeof(double));
     double *CRi           = (double *)malloc((size_t)initial_popsize * sizeof(double));
     double *tmp_scores    = use_lpsr ? (double *)malloc((size_t)initial_popsize * sizeof(double)) : NULL;
     double *tmp_Fi        = use_lpsr ? (double *)malloc((size_t)initial_popsize * sizeof(double)) : NULL;
     double *tmp_CRi       = use_lpsr ? (double *)malloc((size_t)initial_popsize * sizeof(double)) : NULL;
     DeRank *rank          = use_lpsr ? (DeRank *)malloc((size_t)initial_popsize * sizeof(DeRank)) : NULL;
-    if (!pop || !prev_pop || !trial_scratch || !scores || !Fi || !CRi ||
+    if (!pop || !prev_pop || !trial_scratch || !accepted || !scores || !Fi || !CRi ||
         (use_lpsr && (!tmp_scores || !tmp_Fi || !tmp_CRi || !rank))) {
         free(pop); free(prev_pop); free(trial_scratch);
         free(scores); free(Fi); free(CRi);
@@ -139,19 +163,14 @@ static double de_solve_impl(
     int active_popsize = initial_popsize;
 
     /* ── main loop ───────────────────────────────────────────── */
-#pragma omp parallel default(none) shared(params, agent_len, pop, prev_pop, trial_scratch, scores, Fi, CRi, tmp_scores, tmp_Fi, tmp_CRi, rank, rng_states, active_popsize, initial_popsize, min_popsize, use_lpsr, generations, bounds_min, bounds_max, objective)
+#pragma omp parallel default(none) shared(params, agent_len, pop, prev_pop, accepted, trial_scratch, scores, Fi, CRi, tmp_scores, tmp_Fi, tmp_CRi, rank, rng_states, active_popsize, initial_popsize, min_popsize, use_lpsr, generations, bounds_min, bounds_max, objective)
     {
         const int tid = omp_get_thread_num();
-        uint64_t *state = &rng_states[tid];
-        double *trial = trial_scratch + (size_t)tid * agent_len;
+        uint64_t local_state = rng_states[tid]; /* private copy: adjacent rng_states entries would false-share */
+        uint64_t *state = &local_state;
 
         for (int g = 0; g < generations; ++g) {
             const int active = active_popsize;
-            const size_t active_len = (size_t)active * agent_len;
-
-#pragma omp for schedule(static)
-            for (size_t k = 0; k < active_len; ++k)
-                prev_pop[k] = pop[k];
 
 #pragma omp for schedule(static)
             for (int i = 0; i < active; ++i) {
@@ -167,26 +186,47 @@ static double de_solve_impl(
                 int i0, i1, i2;
                 de_pick3(state, active, i, &i0, &i1, &i2);
 
-                const double *x0 = prev_pop + (size_t)i0 * agent_len;
-                const double *x1 = prev_pop + (size_t)i1 * agent_len;
-                const double *x2 = prev_pop + (size_t)i2 * agent_len;
-                const double *xt_prev = prev_pop + (size_t)i * agent_len;
-                double *xt       = pop + (size_t)i  * agent_len;
+                const double *x0 = pop + (size_t)i0 * agent_len;
+                const double *x1 = pop + (size_t)i1 * agent_len;
+                const double *x2 = pop + (size_t)i2 * agent_len;
+                const double *xt_prev = pop + (size_t)i * agent_len;
+                double *trial = prev_pop + (size_t)i * agent_len; /* staging row for individual i */
 
-                for (int j = 0; j < params; ++j) {
+                /* de_rand01(state) < CR  <=>  (draw >> 11) < ceil(CR * 2^53) */
+                const __m256i thr = _mm256_set1_epi64x((long long)ceil(CRi_try * 9007199254740992.0));
+                const __m256d vF = _mm256_set1_pd(Fi_try);
+                const __m256d vlo = _mm256_set1_pd(bounds_min), vhi = _mm256_set1_pd(bounds_max);
+                int j = 0;
+                for (; j + 4 <= params; j += 4) {
+                    __m256i u = de_splitmix64x4(state);
+                    __m256d take = _mm256_castsi256_pd(_mm256_cmpgt_epi64(thr, _mm256_srli_epi64(u, 11)));
+                    __m256d v = _mm256_add_pd(_mm256_loadu_pd(x0 + j),
+                                              _mm256_mul_pd(_mm256_sub_pd(_mm256_loadu_pd(x1 + j), _mm256_loadu_pd(x2 + j)), vF));
+                    v = _mm256_max_pd(_mm256_min_pd(v, vhi), vlo);
+                    _mm256_storeu_pd(trial + j, _mm256_blendv_pd(_mm256_loadu_pd(xt_prev + j), v, take));
+                }
+                for (; j < params; ++j) {
                     if (de_rand01(state) < CRi_try)
-                        trial[j] = de_clamp(x0[j] + (x1[j] - x2[j]) * Fi_try,
-                                            bounds_min, bounds_max);
+                        trial[j] = de_clamp(x0[j] + (x1[j] - x2[j]) * Fi_try, bounds_min, bounds_max);
                     else
                         trial[j] = xt_prev[j];
                 }
 
                 const double trial_score = objective(trial, params);
                 if (trial_score < scores[i]) {
-                    memcpy(xt, trial, agent_len * sizeof(double));
+                    accepted[i] = 1;
                     scores[i] = trial_score;
                     Fi[i]  = Fi_try;
                     CRi[i] = CRi_try;
+                }
+            }
+
+            /* commit accepted trials (all parents were read from the old population above) */
+#pragma omp for schedule(static)
+            for (int i = 0; i < active; ++i) {
+                if (accepted[i]) {
+                    memcpy(pop + (size_t)i * agent_len, prev_pop + (size_t)i * agent_len, agent_len * sizeof(double));
+                    accepted[i] = 0;
                 }
             }
 
@@ -233,6 +273,7 @@ static double de_solve_impl(
     free(pop);
     free(prev_pop);
     free(trial_scratch);
+    free(accepted);
     free(scores);
     free(Fi);
     free(CRi);
