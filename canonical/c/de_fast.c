@@ -2,8 +2,7 @@
    - splitmix64 is counter based (state += GAMMA), so each trial's 200 draws
      start at a known state and are computed 4 at a time with AVX2.
    - CR test is done on the integer (u>>11) < ceil(CR*2^53): same as the double test.
-   - Sphere terms are >= 0, so the in-order partial sum is monotone: once it
-     exceeds scores[i] the trial can't be accepted (same order => same bits).
+   - The sphere sum is fused into the loop, in index order (same bits as de.c).
    - K trials are evaluated in lock-step to overlap their serial sum chains.
    - Accepted trials are copied back after the generation; rejected ones cost no copy.
    Build: gcc -O3 -march=native -ffp-contract=off */
@@ -97,9 +96,6 @@ int main(void) {
                     sum[k] = s;
                 }
                 jv = _mm256_add_epi64(jv, four);
-                int all = 1;
-                for (int k = 0; k < K; ++k) all &= sum[k] > lim[k];
-                if (all) break;
             }
             for (int k = 0; k < K; ++k)
                 if (sum[k] <= lim[k]) { scores[i0 + k] = sum[k]; acc[na++] = i0 + k; }
