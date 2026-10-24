@@ -20,6 +20,10 @@ static const double JDE_F_HI  = 0.9;
 static const double JDE_TAU_F = 0.1;
 static const double JDE_TAU_CR = 0.1;
 
+#ifndef DE_MAX_THREADS
+#define DE_MAX_THREADS 8
+#endif
+
 /* ── splitmix64 RNG ────────────────────────────────────────────── */
 static inline uint64_t de_splitmix64(uint64_t *x) {
     uint64_t z = (*x += 0x9e3779b97f4a7c15ULL);
@@ -116,6 +120,10 @@ static double de_solve_impl(
 
     const size_t agent_len = (size_t)params;
     const size_t capacity_len = (size_t)initial_popsize * agent_len;
+    /* Hyper-threads hurt here (16 threads was up to 3x slower than 8 on small
+       problems): cap at DE_MAX_THREADS unless OMP_NUM_THREADS is set. */
+    if (!getenv("OMP_NUM_THREADS") && omp_get_max_threads() > DE_MAX_THREADS)
+        omp_set_num_threads(DE_MAX_THREADS);
     const int threads = omp_get_max_threads();
     const int use_lpsr = min_popsize < initial_popsize;
 
