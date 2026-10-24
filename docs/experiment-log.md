@@ -195,3 +195,15 @@ which caps how precise it can get (its sphere/ackley results stop around
 Also: the staged random-subspace DE at D=1000 (k=200, S=20) was worse than
 default DE on sphere, rastrigin and ackley and better only on rosenbrock, so the
 subspace idea is dropped.
+
+Wall clock (same runs, ms per 1M-evaluation run, 12 runs sharing the machine,
+so roughly +-20%): both methods take about the same time. On the expensive
+ellipsoid it is ~30 s for both (all loss evaluation), so for expensive losses
+such as a network, equal evaluations means equal time. On cheap losses
+zeroth-order Adam was up to ~3x faster (sphere D=200: 388 vs 1056 ms; rosenbrock
+D=200: 428 vs 1467 ms) because it draws one random number per 64 coordinates
+and `de_tune.c` draws one per coordinate; neither program is speed-optimized
+(the AVX2 tricks from `de_fast.c` would cut DE's overhead ~2.4x).
+
+Open next step: rotated rastrigin and rotated ackley, to check directly whether
+tuned DE's wins come from separability.
