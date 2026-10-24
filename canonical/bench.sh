@@ -7,6 +7,7 @@ N=${N:-7}
 
 echo "building..."
 gcc -O3 -march=native -ffp-contract=off -o c/de_c c/de.c
+gcc -O3 -march=native -ffp-contract=off -o c/de_fast c/de_fast.c
 dotnet build -c Release csharp -o csharp/out -v q -nologo >/dev/null
 roc build --optimize roc/main.roc --output roc/de_roc >/dev/null
 roc build --optimize roc/main_inplace.roc --output roc/de_roc_inplace >/dev/null
@@ -26,6 +27,7 @@ run() {
 
 echo "median of $N runs:"
 run "C (gcc -O3)"          ./c/de_c
+run "C fast (gcc -O3)"     ./c/de_fast
 run "C# (.NET 10)"         ./csharp/out/de_csharp
 run "Roc (simple)"         ./roc/de_roc
 run "Roc (in-place)"       ./roc/de_roc_inplace
