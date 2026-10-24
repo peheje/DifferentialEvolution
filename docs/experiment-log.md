@@ -155,3 +155,43 @@ plain DE gets stuck; JADE is best on rosenbrock. sep-CMA-ES is not listed: the
 first run had a bug (the covariance update multiplied by C twice), and the
 corrected run did not finish in the time I gave it. The harness was a throwaway
 and is not in the repo.
+
+## Zeroth-order Adam vs tuned DE (2026-10-24)
+
+Files: `canonical/c/zo_adam.c` (Adam on an SPSA gradient estimate: m random
++-1 directions per step, each evaluated both ways), `canonical/c/de_tune.c`
+(DE/rand/1/bin with NP, F, CR as arguments, plus jDE), `canonical/c/losses.h`.
+Budget: 1M loss evaluations for everything; median of 5 seeds (3 for the
+ellipsoid); bounds [-10, 10]. DE got 52 settings (NP 20/50/100/200 x F
+0.3/0.5/0.8 x CR 0.1/0.5/0.9/0.99, plus jDE per NP); zeroth-order Adam got 12
+(m 1/8/32 x step 0.3/0.03 x probe radius 1x/10x the step). Best setting per
+case, chosen on the same seeds (optimistic for both):
+
+| case            | DE default | best DE  | best DE setting    | best ZO-Adam |
+|-----------------|-----------:|---------:|--------------------|-------------:|
+| sphere 200      | 1e-17      | 7e-122   | NP=20 F=.5 CR=.1   | 5e-11        |
+| ackley 200      | 1.4        | 1.5e-14  | NP=50 F=.3 CR=.1   | 1.3e-5       |
+| rastrigin 200   | 252        | 0        | jDE NP=100         | 34           |
+| rosenbrock 200  | 406        | 183      | jDE NP=200         | **1.2**      |
+| ellipsoid 200   | 111        | 33.5     | NP=20 F=.5 CR=.5   | **4.9e-9**   |
+| sphere 1000     | 172        | 1.7e-20  | NP=50 F=.3 CR=.1   | 1.8e-9       |
+| ackley 1000     | 5.5        | 1.6e-8   | NP=50 F=.3 CR=.1   | 2.2e-5       |
+| rastrigin 1000  | 4430       | 1260     | NP=20 F=.3 CR=.1   | 831          |
+| rosenbrock 1000 | 1.8e8      | 1040     | NP=100 F=.3 CR=.1  | 974          |
+
+Read: tuning DE changes the picture. The DE default (CR=0.9) was a poor
+choice; the winning settings almost all use CR=0.1, which changes only a few
+coordinates per trial. That is very strong on *separable* functions, where each
+coordinate can be fixed on its own (sphere, ackley, rastrigin), and tuned DE
+wins those. Zeroth-order Adam wins clearly where the function is *not*
+separable: the rotated ellipsoid (by 10^10) and rosenbrock at D=200 (by 150x);
+at D=1000 rastrigin and rosenbrock are about even. A network loss is not
+separable, so the non-separable rows are the ones that matter for that.
+
+Caveats: zeroth-order Adam's step size decays by a fixed 1e-5 over the run,
+which caps how precise it can get (its sphere/ackley results stop around
+1e-9..1e-5); that schedule was not tuned. The D=200 ellipsoid is one rotation.
+
+Also: the staged random-subspace DE at D=1000 (k=200, S=20) was worse than
+default DE on sphere, rastrigin and ackley and better only on rosenbrock, so the
+subspace idea is dropped.
